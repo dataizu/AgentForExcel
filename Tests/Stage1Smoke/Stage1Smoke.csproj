@@ -1,0 +1,43 @@
+<Project ToolsVersion="Current" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <AssemblyName>AgentForExcel.Stage1Smoke</AssemblyName>
+    <RootNamespace>AgentForExcel.Stage1Smoke</RootNamespace>
+    <OutputPath>..\..\bin\Debug\Stage1Smoke\</OutputPath>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json">
+      <Version>8.0.5</Version>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="AgentLoopTestStub.cs" />
+    <Compile Include="..\..\AI\AgentLoopRunner.cs">
+      <Link>AgentLoopRunner.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Operations\Task\TaskExecutionRegistry.cs">
+      <Link>TaskExecutionRegistry.cs</Link>
+    </Compile>
+    <Compile Include="..\..\AI\StreamingReplyAccumulator.cs">
+      <Link>StreamingReplyAccumulator.cs</Link>
+    </Compile>
+    <None Include="App.config" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

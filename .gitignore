@@ -1,0 +1,39 @@
+# Visual Studio / VSTO local state
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build and publish outputs
+bin/
+obj/
+dist/
+artifacts/
+TestResults/
+packages/
+
+# Local agent/editor metadata
+.agents/
+
+# Certificates, signing keys and secrets
+*.pfx
+*.p12
+*.snk
+*.cer
+.env
+.env.*
+secrets.json
+appsettings.Local.json
+
+# Local runtime data and logs
+settings.json
+conversations.json
+*.log
+
+# Generated or user data workbooks
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+~$*

@@ -1,0 +1,656 @@
+<UserControl x:Class="AgentForExcel.UI.ChatView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:models="clr-namespace:AgentForExcel.Models"
+             xmlns:controls="clr-namespace:AgentForExcel.UI.Controls"
+             mc:Ignorable="d"
+             d:DesignHeight="660" d:DesignWidth="380"
+             Background="#FBFAF7" Loaded="ChatView_OnLoaded"
+             FontFamily="Microsoft YaHei UI"
+             TextOptions.TextFormattingMode="Display">
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="InkBrush" Color="#13231D"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#69756F"/>
+        <SolidColorBrush x:Key="GreenBrush" Color="#16764A"/>
+        <SolidColorBrush x:Key="GreenSoftBrush" Color="#E9F4EC"/>
+        <SolidColorBrush x:Key="LineBrush" Color="#DEE5E0"/>
+
+        <DataTemplate x:Key="UserMessageTemplate">
+            <Border Background="#17734A" BorderBrush="#17734A" BorderThickness="1"
+                    CornerRadius="14,14,4,14" Padding="12,9" MaxWidth="300"
+                    HorizontalAlignment="Right" Margin="42,5,6,5">
+                <TextBlock Text="{Binding Text}" Foreground="White" TextWrapping="Wrap"
+                           FontSize="12.5" LineHeight="19"/>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="AssistantMessageTemplate">
+            <Border Background="#FFFEFC" BorderBrush="#E0E6E2" BorderThickness="1"
+                    CornerRadius="14,14,14,4" Padding="12,9" MaxWidth="304"
+                    HorizontalAlignment="Left" Margin="6,5,36,5">
+                <controls:MarkdownViewer Text="{Binding Text}"/>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="StatusMessageTemplate">
+            <Border Background="#F4F8F5" BorderBrush="#DDE8E1" BorderThickness="1"
+                    CornerRadius="11" Padding="10,8" HorizontalAlignment="Left"
+                    Margin="6,4,72,4">
+                <StackPanel Orientation="Horizontal">
+                    <ProgressBar Width="16" Height="16" IsIndeterminate="True"
+                                 Foreground="#1A8354" Background="#D9E9DF"/>
+                    <TextBlock Text="{Binding Title}" FontSize="11.5" Foreground="#526159"
+                               Margin="8,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ToolResultMessageTemplate">
+            <Border Background="#F7FAF8" BorderBrush="#DCE7E0" BorderThickness="1"
+                    CornerRadius="12" Padding="11,9" MaxWidth="318"
+                    HorizontalAlignment="Left" Margin="6,4,28,4">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Border Width="21" Height="21" CornerRadius="10.5" Background="#E3F2E8"
+                            VerticalAlignment="Top">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE73E;" FontSize="10"
+                                   Foreground="#16764A" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Title}" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="#26362F" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding Subtitle}" FontSize="10.5" Foreground="#6E7A74"
+                                   TextWrapping="Wrap" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="TaskPlanMessageTemplate">
+            <Border Background="#FFFEFC" BorderBrush="#CFE0D6" BorderThickness="1"
+                    CornerRadius="14" Padding="12,10" MaxWidth="336"
+                    HorizontalAlignment="Left" Margin="6,5,10,5">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Width="22" Height="22" CornerRadius="7" Background="#E3F2E8">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE9D5;" FontSize="11"
+                                       Foreground="#16764A" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="7,0,6,0">
+                            <TextBlock Text="{Binding TaskPlan.Title}" FontSize="12.5" FontWeight="SemiBold"
+                                       Foreground="#21322A" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding TaskPlan.ProgressText}" FontSize="10" Foreground="#718078"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <Border Grid.Column="2" Background="#EDF5F0" CornerRadius="8" Padding="7,3"
+                                VerticalAlignment="Top">
+                            <TextBlock Text="{Binding TaskPlan.Badge}" FontSize="9.5" Foreground="#25704C"/>
+                        </Border>
+                    </Grid>
+                    <ItemsControl ItemsSource="{Binding TaskPlan.Steps}" Margin="0,9,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type models:TaskPlanStepData}">
+                                <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="25"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Border Width="18" Height="18" CornerRadius="9" BorderThickness="1"
+                                            BorderBrush="{Binding StatusBrush}" VerticalAlignment="Top">
+                                        <TextBlock Text="{Binding Glyph}" FontSize="10" FontWeight="SemiBold"
+                                                   Foreground="{Binding StatusBrush}" HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center"/>
+                                    </Border>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Title}" FontSize="11" Foreground="#33463C"
+                                                   TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding Detail}" FontSize="9.5" Foreground="#7A857F"
+                                                   TextWrapping="Wrap" Margin="0,1,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <ItemsControl ItemsSource="{Binding TaskPlan.SuccessCriteria}" Margin="25,7,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,1">
+                                    <TextBlock Text="验收 · " FontSize="9.5" Foreground="#718078"/>
+                                    <TextBlock Text="{Binding}" FontSize="9.5" Foreground="#718078"
+                                               TextWrapping="Wrap" MaxWidth="260"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
+        <DataTemplate x:Key="TablePreviewMessageTemplate">
+            <Border Background="#FFFEFC" BorderBrush="#D8E4DC" BorderThickness="1"
+                    CornerRadius="14" Padding="0" MaxWidth="336"
+                    HorizontalAlignment="Left" Margin="6,5,10,5" ClipToBounds="True">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="12,10,12,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="26"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Width="21" Height="21" CornerRadius="6" Background="#E3F2E8">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE80A;" FontSize="11"
+                                       Foreground="#16764A" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Grid.Column="1" Text="{Binding Table.Title}" FontSize="12.5"
+                                   FontWeight="SemiBold" Foreground="#21322A" VerticalAlignment="Center"/>
+                        <Border Grid.Column="2" Background="#EDF5F0" CornerRadius="8" Padding="7,3">
+                            <TextBlock Text="{Binding Table.Badge}" FontSize="9.5" Foreground="#25704C"/>
+                        </Border>
+                    </Grid>
+                    <TextBlock Grid.Row="1" Text="{Binding Table.Subtitle}" FontSize="10.5"
+                               Foreground="#6B7771" Margin="12,5,12,9" TextWrapping="Wrap"/>
+                    <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled" Background="#FBFCFB">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Background="#EDF5F0">
+                                <Border Width="36" BorderBrush="#DCE5DF" BorderThickness="0,1,1,1" Padding="4,5">
+                                    <TextBlock Text="#" FontSize="10.5" Foreground="#7A857F" HorizontalAlignment="Center"/>
+                                </Border>
+                                <ItemsControl ItemsSource="{Binding Table.Headers}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="76" BorderBrush="#DCE5DF" BorderThickness="0,1,1,1" Padding="6,5">
+                                                <TextBlock Text="{Binding}" FontSize="10.5" FontWeight="SemiBold"
+                                                           Foreground="#3D5147" HorizontalAlignment="Center"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                            <ItemsControl ItemsSource="{Binding Table.Rows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type models:TablePreviewRow}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Border Width="36" Background="#F5F8F6" BorderBrush="#E1E7E3"
+                                                    BorderThickness="0,0,1,1" Padding="4,5">
+                                                <TextBlock Text="{Binding Number}" FontSize="10" Foreground="#77827C"
+                                                           HorizontalAlignment="Center"/>
+                                            </Border>
+                                            <ItemsControl ItemsSource="{Binding Cells}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Width="76" Background="White" BorderBrush="#E1E7E3"
+                                                                BorderThickness="0,0,1,1" Padding="7,5">
+                                                            <TextBlock Text="{Binding}" FontSize="10.5" Foreground="#2F4037"
+                                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding}"/>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <Style x:Key="IconButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#F3F7F3"/>
+            <Setter Property="BorderBrush" Value="#C9DCD0"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#17633F"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="11">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#E7F1E9"/>
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#9FC4AD"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="#DCEBDD"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Chrome" Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TemplateButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#FFFEFC"/>
+            <Setter Property="BorderBrush" Value="#DDE4DF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Card" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}" CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Card" Property="Background" Value="#F5FAF6"/>
+                                <Setter TargetName="Card" Property="BorderBrush" Value="#AFCDB9"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Card" Property="Background" Value="#EAF4EC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MenuButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="11,8"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="MenuRow" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="MenuRow" Property="Background" Value="#EEF5F0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CompactModelComboStyle" TargetType="ComboBox">
+            <Setter Property="Height" Value="27"/>
+            <Setter Property="MinWidth" Value="120"/>
+            <Setter Property="MaxWidth" Value="150"/>
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="#315247"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="ModelChip" Background="#F2F7F3" BorderBrush="#CFE0D5"
+                                                BorderThickness="1" CornerRadius="8" Padding="8,3">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding SelectedItem.DisplayName, RelativeSource={RelativeSource AncestorType={x:Type ComboBox}}}"
+                                                           VerticalAlignment="Center" Foreground="#315247" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Grid.Column="1" FontFamily="Segoe MDL2 Assets" Text="&#xE70D;"
+                                                           FontSize="9" Foreground="#628072" Margin="7,0,0,0" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ModelChip" Property="Background" Value="#E7F2E9"/></Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                                   AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                <Border MinWidth="150" MaxHeight="260" Background="#FFFEFC" BorderBrush="#CBD9D0"
+                                        BorderThickness="1" CornerRadius="9" Padding="4" Margin="0,3,0,0">
+                                    <ScrollViewer><ItemsPresenter/></ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#FFFEFB" BorderBrush="#E3E8E4"
+                BorderThickness="0,0,0,1" Padding="12,9">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Width="43" Height="39" CornerRadius="10" Background="#F1F5F1" ClipToBounds="True">
+                    <Image Source="/AgentForExcel;component/UI/Assets/agent-logo.png"
+                           Stretch="UniformToFill" Margin="1"/>
+                </Border>
+                <StackPanel Grid.Column="1" Margin="10,0,8,0" VerticalAlignment="Center">
+                    <TextBlock Text="Agent for Excel" Foreground="{StaticResource InkBrush}"
+                               FontWeight="SemiBold" FontSize="15"/>
+                    <TextBlock x:Name="ActiveModelText" Foreground="{StaticResource MutedBrush}"
+                               FontSize="10.5" Margin="0,2,0,0" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <Button x:Name="HistoryButton" Grid.Column="2" Width="40" Height="40" Margin="0,0,7,0"
+                        Style="{StaticResource IconButtonStyle}" Click="ConversationHistory_Click"
+                        ToolTip="对话记录" AutomationProperties.Name="对话记录">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE81C;" FontSize="16"/>
+                </Button>
+                <Button x:Name="NewChatButton" Grid.Column="3" Width="40" Height="40" Margin="0,0,7,0"
+                        Style="{StaticResource IconButtonStyle}" Click="NewChatButton_Click"
+                        ToolTip="新建对话" AutomationProperties.Name="新建对话">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE710;" FontSize="16"/>
+                </Button>
+                <Button x:Name="SettingsButton" Grid.Column="4" Width="40" Height="40"
+                        Style="{StaticResource IconButtonStyle}" Click="SettingsButton_Click"
+                        ToolTip="打开设置菜单" AutomationProperties.Name="显示设置">
+                    <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE713;" FontSize="18"/>
+                </Button>
+            </Grid>
+        </Border>
+
+        <ScrollViewer x:Name="MessagesScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled" CanContentScroll="False">
+            <StackPanel>
+                <StackPanel x:Name="WelcomePanel" Margin="18,22,18,8">
+                    <Border Width="58" Height="58" Background="#E8F2E8" CornerRadius="29"
+                            HorizontalAlignment="Left" Margin="0,0,0,16">
+                        <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE80A;" FontSize="27"
+                                   Foreground="#176B43" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="今天想分析哪张表？" FontSize="24" FontWeight="SemiBold"
+                               Foreground="{StaticResource InkBrush}" Margin="0,0,0,9"/>
+                    <TextBlock Text="我可以读取、写入并整理当前工作表，先帮你检查结构、质量和关键趋势。"
+                               FontSize="13" Foreground="#55645D" LineHeight="21"
+                               TextWrapping="Wrap" Margin="0,0,0,14"/>
+                    <Border Background="#EAF5EC" BorderBrush="#C7DFC9" BorderThickness="1"
+                            CornerRadius="14" Padding="10,6" HorizontalAlignment="Left" Margin="0,0,0,23">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE83D;" FontSize="13"
+                                       Foreground="#17734A" VerticalAlignment="Center"/>
+                            <TextBlock Text="读取与写入 · 已开启" FontSize="11.5" Foreground="#176A43"
+                                       Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="常用入口" FontSize="14" FontWeight="SemiBold"
+                               Foreground="{StaticResource InkBrush}" Margin="1,0,0,10"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="76"/>
+                            <RowDefinition Height="76"/>
+                        </Grid.RowDefinitions>
+
+                        <Button Grid.Row="0" Grid.Column="0" Margin="0,0,5,5"
+                                Style="{StaticResource TemplateButtonStyle}"
+                                Tag="请读取当前工作表，对数据质量进行体检：检查空值、重复值、格式不一致、异常值，并给出处理优先级。"
+                                Click="TemplateButton_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE9D5;" FontSize="21" Foreground="#18774A" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="数据质量体检" FontSize="12.5" Foreground="{StaticResource InkBrush}" Margin="9,0,4,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#6C756F" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Button>
+                        <Button Grid.Row="0" Grid.Column="1" Margin="5,0,0,5"
+                                Style="{StaticResource TemplateButtonStyle}"
+                                Tag="请分析当前工作表中的主要趋势和异常波动，说明时间范围、关键变化和可能原因。"
+                                Click="TemplateButton_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE9D2;" FontSize="21" Foreground="#18774A" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="趋势与异常" FontSize="12.5" Foreground="{StaticResource InkBrush}" Margin="9,0,4,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#6C756F" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Button>
+                        <Button Grid.Row="1" Grid.Column="0" Margin="0,5,5,0"
+                                Style="{StaticResource TemplateButtonStyle}"
+                                Tag="请基于当前工作表给出指标拆解思路：定义核心指标，拆成可行动的驱动因素，并说明推荐的分析顺序。"
+                                Click="TemplateButton_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8FD;" FontSize="21" Foreground="#CB7535" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="指标拆解思路" FontSize="12.5" Foreground="{StaticResource InkBrush}" Margin="9,0,4,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#6C756F" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Button>
+                        <Button Grid.Row="1" Grid.Column="1" Margin="5,5,0,0"
+                                Style="{StaticResource TemplateButtonStyle}"
+                                Tag="请根据当前工作表和我接下来描述的目标，给出可直接复制的 Excel 公式，并解释参数和适用范围。"
+                                Click="TemplateButton_Click">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8EF;" FontSize="21" Foreground="#CB7535" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="生成公式建议" FontSize="12.5" Foreground="{StaticResource InkBrush}" Margin="9,0,4,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#6C756F" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Button>
+                    </Grid>
+                    <Button Content="打开功能中心  ›" Background="Transparent" BorderThickness="0"
+                            Foreground="#147246" FontSize="12.5" Cursor="Hand" HorizontalAlignment="Center"
+                            Padding="8" Margin="0,7,0,0" Click="AnalysisTemplates_Click"/>
+                </StackPanel>
+
+                <ItemsControl x:Name="MessagesList" Margin="8,4,8,10">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type models:ChatMessage}">
+                            <ContentControl Content="{Binding}">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl">
+                                        <Setter Property="ContentTemplate" Value="{StaticResource AssistantMessageTemplate}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Kind}" Value="Status">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource StatusMessageTemplate}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="ToolResult">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource ToolResultMessageTemplate}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="TablePreview">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource TablePreviewMessageTemplate}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Kind}" Value="TaskPlan">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource TaskPlanMessageTemplate}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsUser}" Value="True">
+                                                <Setter Property="ContentTemplate" Value="{StaticResource UserMessageTemplate}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ContentControl.Style>
+                            </ContentControl>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Background="#FFFEFB" BorderBrush="#DCE3DE" BorderThickness="0,1,0,0" Padding="10,9,10,8">
+            <Border BorderBrush="#CDD7D0" BorderThickness="1" Background="White" CornerRadius="15" Padding="9,8,9,6">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Width="34" Height="34" Margin="0,3,7,0" VerticalAlignment="Top"
+                                Style="{StaticResource IconButtonStyle}" Background="White"
+                                BorderBrush="#D8E1DA" Click="ComposerPlus_Click"
+                                ToolTip="打开功能中心" AutomationProperties.Name="打开功能中心">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE710;" FontSize="14"/>
+                        </Button>
+                        <Grid Grid.Column="1" Margin="2,0,8,0">
+                            <TextBlock x:Name="InputPlaceholder" Text="例如：分析 A 到 F 列的销售趋势"
+                                       Foreground="#8A938E" FontSize="12.5" Margin="3,8,0,0"
+                                       VerticalAlignment="Top" IsHitTestVisible="False"/>
+                            <TextBox x:Name="InputBox" MinHeight="42" MaxHeight="84" FontSize="12.5"
+                                     KeyDown="InputBox_KeyDown" TextChanged="InputBox_TextChanged"
+                                     AcceptsReturn="True" MaxLines="4" TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto" BorderThickness="0"
+                                     Background="Transparent" Foreground="#1D2B25" Padding="2,7"/>
+                        </Grid>
+                        <Button x:Name="SendButton" Grid.Column="2" Width="39" Height="39"
+                                Style="{StaticResource IconButtonStyle}" Background="#168653"
+                                BorderBrush="#168653" Foreground="White" Click="SendButton_Click"
+                                ToolTip="发送" AutomationProperties.Name="发送消息">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE724;" FontSize="16"/>
+                        </Button>
+                    </Grid>
+                    <Grid Grid.Row="1" Margin="0,5,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <Button x:Name="SelectionReferenceButton" Grid.Column="0" Height="30"
+                                Background="#F2F7F4" BorderBrush="#D5E3DA" BorderThickness="1"
+                                Padding="8,0" HorizontalContentAlignment="Left" Cursor="Hand"
+                                Click="SelectionReference_Click" ToolTip="点击在输入框中引用当前选区">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE8A7;" FontSize="12"
+                                           Foreground="#187A4C" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="SelectionContextText" Grid.Column="1" Text="未检测到 Excel 选区"
+                                           FontSize="10.5" Foreground="#53665D" Margin="7,0,0,0"
+                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            </Grid>
+                        </Button>
+                        <Button x:Name="SelectionLockButton" Grid.Column="1" Width="31" Height="30" Margin="6,0,0,0"
+                                Style="{StaticResource IconButtonStyle}" Background="#F2F7F4" BorderBrush="#D5E3DA"
+                                Click="SelectionLock_Click" ToolTip="锁定当前选区">
+                            <TextBlock x:Name="SelectionLockIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE72E;"
+                                       FontSize="12" Foreground="#62736A"/>
+                        </Button>
+                    </Grid>
+                    <Grid Grid.Row="2" Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <ComboBox x:Name="QuickModelCombo" Grid.Column="0" Style="{StaticResource CompactModelComboStyle}"
+                                  DisplayMemberPath="DisplayName" SelectionChanged="QuickModelCombo_SelectionChanged"
+                                  ToolTip="切换当前对话使用的模型"/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE83D;" FontSize="10.5" Foreground="#25825A"/>
+                            <TextBlock x:Name="WorkbookContextText" Text="当前工作簿" FontSize="10.5" Foreground="#747E78" Margin="5,0,0,0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text=" · " FontSize="10.5" Foreground="#A0A8A3"/>
+                            <TextBlock x:Name="AutomationModeText" Text="安全自动" FontSize="10.5" Foreground="#25825A"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Border>
+
+        <Popup x:Name="SettingsPopup" PlacementTarget="{Binding ElementName=SettingsButton}"
+               Placement="Bottom" HorizontalOffset="-244" VerticalOffset="5"
+               AllowsTransparency="True" StaysOpen="False" PopupAnimation="Fade">
+            <Border Width="286" Background="#FFFEFC" BorderBrush="#D8E0DA" BorderThickness="1"
+                    CornerRadius="14" Padding="7" SnapsToDevicePixels="True">
+                <Border.Effect>
+                    <DropShadowEffect Color="#2C4638" BlurRadius="18" ShadowDepth="4" Opacity="0.18"/>
+                </Border.Effect>
+                <StackPanel>
+                    <Button Style="{StaticResource MenuButtonStyle}" Click="ModelSettings_Click">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE774;" FontSize="16" Foreground="#176C44"/>
+                            <TextBlock Grid.Column="1" Text="模型与连接" FontSize="13" Foreground="#1B2923"/>
+                            <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#8A928E"/>
+                        </Grid>
+                    </Button>
+                    <Button Style="{StaticResource MenuButtonStyle}" Click="SafetySettings_Click">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE83D;" FontSize="16" Foreground="#176C44"/>
+                            <TextBlock Grid.Column="1" Text="执行与安全" FontSize="13" Foreground="#1B2923"/>
+                            <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#8A928E"/>
+                        </Grid>
+                    </Button>
+                    <Button Style="{StaticResource MenuButtonStyle}" Click="WorkbookSettings_Click">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xEA80;" FontSize="16" Foreground="#176C44"/>
+                            <TextBlock Grid.Column="1" Text="工作簿行为" FontSize="13" Foreground="#1B2923"/>
+                            <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#8A928E"/>
+                        </Grid>
+                    </Button>
+                    <Button Style="{StaticResource MenuButtonStyle}" Click="DiagnosticsSettings_Click">
+                        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="26"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE897;" FontSize="16" Foreground="#176C44"/>
+                            <TextBlock Grid.Column="1" Text="诊断与关于" FontSize="13" Foreground="#1B2923"/>
+                            <TextBlock Grid.Column="2" FontFamily="Segoe MDL2 Assets" Text="&#xE76C;" Foreground="#8A928E"/>
+                        </Grid>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <Grid x:Name="DetailsOverlay" Grid.RowSpan="3" Background="#8013211B" Visibility="Collapsed">
+            <Border Background="#FFFDF9" BorderBrush="#D6DFD9" BorderThickness="1"
+                    CornerRadius="16" Margin="18" Padding="16" VerticalAlignment="Center" MaxHeight="560">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="0,0,0,12">
+                        <TextBlock x:Name="DetailsTitle" FontSize="18" FontWeight="SemiBold"
+                                   Foreground="{StaticResource InkBrush}" VerticalAlignment="Center"/>
+                        <Button HorizontalAlignment="Right" Width="34" Height="34"
+                                Style="{StaticResource IconButtonStyle}" Click="CloseDetails_Click"
+                                ToolTip="关闭">
+                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE711;" FontSize="13"/>
+                        </Button>
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="DetailsBody"/>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>
