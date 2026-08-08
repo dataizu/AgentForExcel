@@ -20,6 +20,7 @@ namespace AgentForExcel.AI
             string automation;
             switch (settings.AutomationMode)
             {
+                case "auto": automation = "自动执行：常规读写与结果输出自动运行，VBA、数据模型、刷新等危险操作仍询问"; break;
                 case "ask_every_time": automation = "每次写入都由用户确认"; break;
                 case "custom": automation = "按用户自定义白名单自动执行，其余写操作确认"; break;
                 default: automation = "安全自动化：新工作表输出和锁定选区内的低风险操作可自动执行"; break;
@@ -53,10 +54,11 @@ namespace AgentForExcel.AI
 5. 把源数据复制为值快照，在新的分析工作表中安全排序和展示
 6. 根据二维表创建柱形图、条形图、折线图、精美环形图、饼图、面积图或散点图
 7. 创建普通非 OLAP 数据透视表，并配置行、列、筛选和值字段
-8. 创建原生 Excel 联动数据看板，包含 KPI、趋势、排名、占比、明细透视表和全局切片器
+8. 创建原生 Excel 联动数据看板，包含 KPI、趋势、排名、占比、对比、明细透视表和全局切片器
 9. 根据当前工作簿区域创建 Power Query 清洗查询，配置字段类型、文本清理、空行、重复项、重命名和选列，并加载或刷新结果
 10. 把 Power Query 查询载入 Power Pivot 数据模型，建立一对多关系，创建 DAX 度量值，并生成跨表模型透视表
 11. 只读检查 Excel、工作簿、Power Query、Power Pivot 和 VBA 权限环境
+12. 从本地图片文件读取并转换为像素画
 
 VBA 仅开放受控白名单配方：刷新全部、自动列宽和导出当前工作表 PDF。必须先预览，再使用一次性令牌执行；不接受任意代码注入。
 

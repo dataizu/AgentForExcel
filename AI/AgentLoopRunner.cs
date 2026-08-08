@@ -43,9 +43,9 @@ namespace AgentForExcel.AI
     /// </summary>
     public static class AgentLoopRunner
     {
-        public const int MaxRounds = 12;
-        public const int MaxToolCalls = 36;
-        public const int MaxCompletionNudges = 3;
+        public const int MaxRounds = 24;
+        public const int MaxToolCalls = 72;
+        public const int MaxCompletionNudges = 5;
 
         public static async Task<AgentRunResult> RunAsync(
             string userMessage,

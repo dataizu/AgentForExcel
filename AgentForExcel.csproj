@@ -1,4 +1,4 @@
-﻿<Project ToolsVersion="18.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="18.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <!--
     This section defines project-level properties.
@@ -28,12 +28,32 @@
     <AssemblyName>AgentForExcel</AssemblyName>
     <LoadBehavior>3</LoadBehavior>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <AgentEdition Condition="'$(AgentEdition)' == ''">Professional</AgentEdition>
     <DefineConstants>VSTO40;UseOfficeInterop</DefineConstants>
     <BootstrapperEnabled>true</BootstrapperEnabled>
+    <GenerateBootstrapper>true</GenerateBootstrapper>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
     <BootstrapperComponentsLocation>HomeSite</BootstrapperComponentsLocation>
     <ResolveComReferenceSilent>true</ResolveComReferenceSilent>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(AgentEdition)' == 'Trial'">
+    <DefineConstants>$(DefineConstants);AGENT_EDITION_TRIAL</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AgentEdition)' == 'Standard'">
+    <DefineConstants>$(DefineConstants);AGENT_EDITION_STANDARD</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AgentEdition)' == 'Professional'">
+    <DefineConstants>$(DefineConstants);AGENT_EDITION_PROFESSIONAL</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(AgentEdition)' == 'Automation'">
+    <DefineConstants>$(DefineConstants);AGENT_EDITION_AUTOMATION</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
+    <BootstrapperPackage Include=".NETFramework,Version=v4.8">
+      <Visible>False</Visible>
+      <ProductName>Microsoft .NET Framework 4.8</ProductName>
+      <Install>true</Install>
+    </BootstrapperPackage>
     <BootstrapperPackage Include="Microsoft.VSTORuntime.4.0">
       <Visible>False</Visible>
       <ProductName>Microsoft Visual Studio 2010 Tools for Office Runtime %28x86 and x64%29</ProductName>
@@ -256,6 +276,8 @@
     <Compile Include="Operations\Cell\WriteRangeOp.cs" />
     <Compile Include="Operations\Cell\FillFormulaOp.cs" />
     <Compile Include="Operations\Cell\FormatRangeOp.cs" />
+    <Compile Include="Operations\Cell\DrawPixelsOp.cs" />
+    <Compile Include="Operations\Cell\DrawFromImageOp.cs" />
     <Compile Include="Operations\Analysis\AnalysisSheetSupport.cs" />
     <Compile Include="Operations\Analysis\CreateAnalysisViewOp.cs" />
     <Compile Include="Operations\Analysis\ProfileDataOp.cs" />
@@ -273,11 +295,15 @@
     <Compile Include="Models\ChatConversation.cs" />
     <Compile Include="Models\ModelProfile.cs" />
     <Compile Include="Models\CapabilityDefinition.cs" />
+    <Compile Include="Models\ProductEdition.cs" />
     <Compile Include="Models\SelectionContext.cs" />
     <Compile Include="Models\UserSettings.cs" />
     <Compile Include="Models\ExcelContextSnapshot.cs" />
     <Compile Include="Services\ChatHistoryStore.cs" />
     <Compile Include="Services\CapabilityCatalog.cs" />
+    <Compile Include="Services\EditionPolicy.cs" />
+    <Compile Include="Services\PerformanceLogger.cs" />
+    <Compile Include="Services\RuntimeEnvironmentInspector.cs" />
     <Compile Include="Services\SelectionContextService.cs" />
     <Compile Include="Services\PermissionPolicyService.cs" />
     <Compile Include="Services\AgentAutomationService.cs" />

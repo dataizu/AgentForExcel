@@ -50,7 +50,17 @@ namespace AgentForExcel.Stage1Smoke
                 }
                 if (args != null && Array.IndexOf(args, "--settings-only") >= 0)
                     return RunSettingsAndCatalogSmoke();
+                if (args != null && Array.IndexOf(args, "--vba-only") >= 0)
+                    return RunSafeVbaSmoke();
+                if (args != null && Array.IndexOf(args, "--powerpivot-only") >= 0)
+                {
+                    RunPowerPivotSmoke();
+                    Console.WriteLine("PASS");
+                    Console.WriteLine("Power Pivot 查询入模、关系、DAX 与模型透视验证通过。");
+                    return 0;
+                }
                 var permissionOnly = args != null && Array.IndexOf(args, "--permission-only") >= 0;
+                var performanceOnly = args != null && Array.IndexOf(args, "--performance-only") >= 0;
 
                 excel = Activator.CreateInstance(Type.GetTypeFromProgID("Excel.Application", true));
                 excel.AutomationSecurity = 1;
@@ -61,6 +71,14 @@ namespace AgentForExcel.Stage1Smoke
                 worksheet.Name = "Stage1Test";
 
                 _context = CreateContext(excel);
+
+                if (performanceOnly)
+                {
+                    TestLargeRangeReadAndProfile(worksheet);
+                    Console.WriteLine("PASS");
+                    Console.WriteLine("大范围预览与数据体检性能路径验证通过（9,999 行 × 5 列）。");
+                    return 0;
+                }
 
                 if (permissionOnly)
                 {
@@ -128,7 +146,7 @@ namespace AgentForExcel.Stage1Smoke
                 var dashboardSourceValueBefore = Convert.ToDouble(worksheet.Range("S2").Value2);
                 var dashboard = InvokeOperation(
                     "AgentForExcel.Operations.Dashboard.CreateDashboardOp+Factory",
-                    "{\"source_sheet\":\"Stage1Test\",\"source_address\":\"O1:T13\",\"dashboard_sheet_name\":\"Agent看板\",\"title\":\"销售经营看板\",\"date_field\":\"日期\",\"category_field\":\"产品\",\"series_field\":\"区域\",\"value_field\":\"销售额\",\"filter_fields\":[\"区域\",\"类别\"],\"aggregation\":\"sum\",\"top_n\":5,\"number_format\":\"¥#,##0\"}");
+                    "{\"source_sheet\":\"Stage1Test\",\"source_address\":\"O1:T13\",\"dashboard_sheet_name\":\"Agent看板\",\"title\":\"销售经营看板\",\"date_field\":\"日期\",\"category_field\":\"产品\",\"series_field\":\"区域\",\"value_field\":\"销售额\",\"filter_fields\":[\"区域\",\"类别\"],\"filter_mode\":\"slicer\",\"aggregation\":\"sum\",\"top_n\":5,\"number_format\":\"¥#,##0\"}");
                 var dropdownDashboard = InvokeOperation(
                     "AgentForExcel.Operations.Dashboard.CreateDashboardOp+Factory",
                     "{\"source_sheet\":\"Stage1Test\",\"source_address\":\"O1:T13\",\"dashboard_sheet_name\":\"Agent下拉看板\",\"title\":\"销售经营看板（兼容）\",\"date_field\":\"日期\",\"category_field\":\"产品\",\"series_field\":\"区域\",\"value_field\":\"销售额\",\"filter_fields\":[\"区域\",\"类别\"],\"filter_mode\":\"dropdown\",\"aggregation\":\"sum\",\"top_n\":5,\"number_format\":\"¥#,##0\"}");
@@ -154,6 +172,7 @@ namespace AgentForExcel.Stage1Smoke
                 Assert(Convert.ToDouble(worksheet.Range("B3").Value2) == 20, "B3 写值失败");
                 Assert(Convert.ToDouble(worksheet.Range("C2").Value2) == 20, "C2 公式结果失败");
                 Assert(Convert.ToDouble(worksheet.Range("C3").Value2) == 40, "C3 公式结果失败");
+                Assert(dashboard.Contains("原生切片器"), "原生看板没有使用切片器模式：" + dashboard);
                 Assert(powerQueryCreated.Contains("源数据未修改"), "Power Query 创建结果没有声明源表保护");
                 Assert(powerQueryList.StartsWith("__AGENT_PQ_LIST__"), "Power Query 列表没有返回结构化结果");
                 using (var queryListJson = JsonDocument.Parse(powerQueryList.Substring("__AGENT_PQ_LIST__".Length)))
@@ -434,9 +453,9 @@ namespace AgentForExcel.Stage1Smoke
             {
                 try { if (workbook != null) workbook.Close(false); } catch { }
                 try { if (excel != null) excel.Quit(); } catch { }
-                ReleaseCom(worksheet);
-                ReleaseCom(workbook);
-                ReleaseCom(excel);
+                ReleaseCom((object)worksheet);
+                ReleaseCom((object)workbook);
+                ReleaseCom((object)excel);
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
             }
@@ -469,6 +488,15 @@ namespace AgentForExcel.Stage1Smoke
                 Assert(!Convert.ToBoolean(settingsType.GetProperty("EnablePowerQuery").GetValue(loaded)), "工具权限设置未持久化");
                 Assert(Convert.ToString(settingsType.GetProperty("DefaultAnalysisScope").GetValue(loaded)) == "Selection", "默认范围设置未持久化");
 
+                var editionInfoType = _agentAssembly.GetType("AgentForExcel.Models.ProductEditionInfo", true);
+                var currentEdition = Convert.ToString(editionInfoType.GetProperty("Current").GetValue(null));
+                Assert(currentEdition == "Professional", "Default build should be Professional");
+                var policyType = _agentAssembly.GetType("AgentForExcel.Services.EditionPolicy", true);
+                Assert(Convert.ToString(policyType.GetMethod("GetMinimumEditionForTool").Invoke(null, new object[] { "pq_create_from_range" })) == "Professional",
+                    "Power Query edition boundary is wrong");
+                Assert(Convert.ToString(policyType.GetMethod("GetMinimumEditionForTool").Invoke(null, new object[] { "vba_execute_safe" })) == "Automation",
+                    "VBA edition boundary is wrong");
+
                 var promptType = _agentAssembly.GetType("AgentForExcel.AI.PromptBuilder", true);
                 var prompt = Convert.ToString(promptType.GetMethod("BuildSystemPrompt").Invoke(null, new[] { loaded }));
                 Assert(prompt.Contains("当前选区"), "运行时提示词未应用默认范围");
@@ -483,6 +511,8 @@ namespace AgentForExcel.Stage1Smoke
                 {
                     count++;
                     categories.Add(Convert.ToString(item.GetType().GetProperty("Category").GetValue(item)));
+                    Assert(item.GetType().GetProperty("MinimumEdition").GetValue(item) != null,
+                        "Capability is missing an edition boundary");
                 }
                 Assert(count >= 15, "功能中心能力数量不足");
                 Assert(categories.Contains("分析数据") && categories.Contains("生成报告") &&
@@ -592,9 +622,124 @@ namespace AgentForExcel.Stage1Smoke
                 try { if (modelWorkbook != null) modelWorkbook.Close(false); } catch { }
                 try { if (modelExcel != null) modelExcel.Quit(); } catch { }
                 _context = originalContext;
-                ReleaseCom(sheet);
-                ReleaseCom(modelWorkbook);
-                ReleaseCom(modelExcel);
+                ReleaseCom((object)sheet);
+                ReleaseCom((object)modelWorkbook);
+                ReleaseCom((object)modelExcel);
+            }
+        }
+
+        private static int RunSafeVbaSmoke()
+        {
+            dynamic excel = null;
+            dynamic workbook = null;
+            dynamic sheet = null;
+            dynamic auditSheet = null;
+            var originalContext = _context;
+            var tempRoot = Path.GetFullPath(Path.GetTempPath());
+            var tempDirectory = Path.Combine(tempRoot, "AgentForExcel-VbaSmoke-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDirectory);
+            try
+            {
+                excel = Activator.CreateInstance(Type.GetTypeFromProgID("Excel.Application", true));
+                excel.AutomationSecurity = 1;
+                excel.Visible = false;
+                excel.DisplayAlerts = false;
+                workbook = excel.Workbooks.Add();
+                workbook.Activate();
+                sheet = workbook.Worksheets.Item(1);
+                sheet.Name = "VbaSmoke";
+                sheet.Range("A1").Value2 = "受控 VBA 自动调整列宽验证";
+                sheet.Columns("A").ColumnWidth = 80;
+
+                var workbookPath = Path.Combine(tempDirectory, "SafeVbaSmoke.xlsm");
+                workbook.SaveAs(workbookPath, 52);
+                _context = CreateContext(excel);
+
+                var componentCountBefore = Convert.ToInt32(workbook.VBProject.VBComponents.Count);
+                var preview = InvokeOperation(
+                    "AgentForExcel.Operations.Macro.PreviewSafeVbaOp+Factory",
+                    "{\"recipe\":\"autofit_used_ranges\"}");
+                Assert(preview.StartsWith("__AGENT_VBA_PREVIEW__"), "受控 VBA 预览没有返回结构化结果");
+
+                string token;
+                using (var previewJson = JsonDocument.Parse(preview.Substring("__AGENT_VBA_PREVIEW__".Length)))
+                {
+                    var root = previewJson.RootElement;
+                    token = root.GetProperty("preview_token").GetString();
+                    Assert(root.GetProperty("recipe").GetString() == "autofit_used_ranges", "受控 VBA 配方错误");
+                    Assert(root.GetProperty("safeguards").GetArrayLength() == 4, "受控 VBA 安全措施不完整");
+                }
+
+                var executed = InvokeOperation(
+                    "AgentForExcel.Operations.Macro.ExecuteSafeVbaOp+Factory",
+                    "{\"preview_token\":\"" + token + "\"}");
+                Assert(executed.Contains("已执行受控 VBA"), "受控 VBA 没有返回成功结果");
+                Assert(Convert.ToDouble(sheet.Columns("A").ColumnWidth) <= 40d, "受控 VBA 没有限制最大列宽");
+                var components = workbook.VBProject.VBComponents;
+                var temporaryModuleFound = false;
+                for (var index = 1; index <= Convert.ToInt32(components.Count); index++)
+                {
+                    var componentName = Convert.ToString(components.Item(index).Name);
+                    if (componentName.StartsWith("AgentSafe", StringComparison.OrdinalIgnoreCase))
+                        temporaryModuleFound = true;
+                }
+                Assert(!temporaryModuleFound, "受控 VBA 执行后没有移除临时模块");
+                Assert(Convert.ToInt32(components.Count) == componentCountBefore + 1,
+                    "受控 VBA 执行后的工程组件数量异常（应只新增审计工作表组件）");
+
+                auditSheet = workbook.Worksheets.Item("__AgentAudit");
+                Assert(Convert.ToInt32(auditSheet.Visible) == 2, "受控 VBA 审计表没有深度隐藏");
+                Assert(Convert.ToString(auditSheet.Range("B2").Value2) == "VBA", "受控 VBA 审计类型错误");
+                Assert(Convert.ToString(auditSheet.Range("C2").Value2) == "autofit_used_ranges", "受控 VBA 审计配方错误");
+                Assert(Convert.ToString(auditSheet.Range("D2").Value2) == "成功", "受控 VBA 审计状态错误");
+
+                var backupDirectory = Path.Combine(tempDirectory, "AgentBackups");
+                Assert(Directory.Exists(backupDirectory) &&
+                       Directory.GetFiles(backupDirectory, "SafeVbaSmoke_before_vba_*.xlsm").Length == 1,
+                    "受控 VBA 没有创建执行前备份");
+
+                var tokenRejected = false;
+                try
+                {
+                    InvokeOperation(
+                        "AgentForExcel.Operations.Macro.ExecuteSafeVbaOp+Factory",
+                        "{\"preview_token\":\"" + token + "\"}");
+                }
+                catch (TargetInvocationException ex)
+                {
+                    tokenRejected = ex.InnerException is ArgumentException;
+                }
+                Assert(tokenRejected, "受控 VBA 一次性令牌可以重复使用");
+
+                Console.WriteLine("PASS");
+                Console.WriteLine("受控 VBA 预览、一次性令牌、备份、执行、临时模块清理与审计验证通过。");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("FAIL");
+                Console.Error.WriteLine(ex);
+                return 1;
+            }
+            finally
+            {
+                try { if (workbook != null) workbook.Close(false); } catch { }
+                try { if (excel != null) excel.Quit(); } catch { }
+                _context = originalContext;
+                ReleaseCom((object)auditSheet);
+                ReleaseCom((object)sheet);
+                ReleaseCom((object)workbook);
+                ReleaseCom((object)excel);
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                try
+                {
+                    var resolved = Path.GetFullPath(tempDirectory);
+                    if (resolved.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase) &&
+                        Path.GetFileName(resolved).StartsWith("AgentForExcel-VbaSmoke-", StringComparison.Ordinal))
+                        Directory.Delete(resolved, true);
+                }
+                catch { }
             }
         }
 
@@ -660,6 +805,54 @@ namespace AgentForExcel.Stage1Smoke
             ((Task)execute.Invoke(dispatcher, new object[] { calls, approve })).Wait();
             Assert(confirmationCount == 2, "批准执行时没有触发确认回调");
             Assert(Convert.ToString(worksheet.Range("E1").Value2) == "Confirmed", "批准后没有写入单元格");
+        }
+
+        private static void TestLargeRangeReadAndProfile(dynamic worksheet)
+        {
+            // CellOperationSupport 的单次操作安全上限是 50,000 个单元格，
+            // 此处正好覆盖上限内的大范围场景（含标题行）。
+            const int dataRows = 9999;
+            const int columns = 5;
+            var data = new object[dataRows + 1, columns];
+            data[0, 0] = "日期";
+            data[0, 1] = "区域";
+            data[0, 2] = "产品";
+            data[0, 3] = "销售额";
+            data[0, 4] = "数量";
+            for (var row = 1; row <= dataRows; row++)
+            {
+                data[row, 0] = "2026-" + (((row - 1) % 12) + 1).ToString("00");
+                data[row, 1] = row % 2 == 0 ? "华东" : "华南";
+                data[row, 2] = "产品" + ((row % 8) + 1);
+                data[row, 3] = 1000 + (row % 97) * 37;
+                data[row, 4] = (row % 20) + 1;
+            }
+            worksheet.Range("A1").Resize[dataRows + 1, columns].Value2 = data;
+
+            var read = InvokeOperation(
+                "AgentForExcel.Operations.Cell.ReadRangeOp+Factory",
+                "{\"sheet\":\"Stage1Test\",\"address\":\"A1:E10000\"}");
+            Assert(read.StartsWith("__AGENT_TABLE_PREVIEW__"), "大范围读取没有返回结构化预览");
+            using (var preview = JsonDocument.Parse(read.Substring("__AGENT_TABLE_PREVIEW__".Length)))
+            {
+                var root = preview.RootElement;
+                Assert(root.GetProperty("total_rows").GetInt32() == dataRows + 1, "大范围读取总行数错误");
+                Assert(root.GetProperty("total_columns").GetInt32() == columns, "大范围读取总列数错误");
+                Assert(root.GetProperty("shown_rows").GetInt32() == 12, "大范围读取没有限制预览行数");
+                Assert(root.GetProperty("shown_columns").GetInt32() == columns, "大范围读取预览列数错误");
+            }
+
+            var profile = InvokeOperation(
+                "AgentForExcel.Operations.Analysis.ProfileDataOp+Factory",
+                "{\"sheet\":\"Stage1Test\",\"address\":\"A1:E10000\"}");
+            Assert(profile.StartsWith("__AGENT_DATA_PROFILE__"), "大范围数据体检没有返回结构化结果");
+            using (var profileJson = JsonDocument.Parse(profile.Substring("__AGENT_DATA_PROFILE__".Length)))
+            {
+                var root = profileJson.RootElement;
+                Assert(root.GetProperty("data_rows").GetInt32() == dataRows, "大范围数据体检行数错误");
+                Assert(root.GetProperty("columns").GetInt32() == columns, "大范围数据体检列数错误");
+                Assert(root.GetProperty("fields").GetArrayLength() == columns, "大范围数据体检字段数错误");
+            }
         }
 
         private static void TestSafeAutomationPermissions(dynamic worksheet)

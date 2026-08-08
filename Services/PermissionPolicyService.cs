@@ -57,6 +57,15 @@ namespace AgentForExcel.Services
                 document = JsonDocument.Parse(string.IsNullOrWhiteSpace(call?.ArgumentsJson) ? "{}" : call.ArgumentsJson);
                 var root = document.RootElement;
 
+                if (string.Equals(settings.AutomationMode, "auto", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (tool == "pq_create_from_range")
+                        return ReadBool(root, "replace_existing")
+                            ? PermissionDecision.Confirm("将覆盖现有 Power Query 查询定义")
+                            : PermissionDecision.Allow("自动执行模式：常规写操作自动放行");
+                    return PermissionDecision.Allow("自动执行模式：常规写操作自动放行");
+                }
+
                 if (tool == "pq_create_from_range")
                     return ReadBool(root, "replace_existing")
                         ? PermissionDecision.Confirm("将覆盖现有 Power Query 查询定义")
@@ -74,7 +83,7 @@ namespace AgentForExcel.Services
                     return EvaluateLockedSelectionWrite(root, false, settings.AutoWriteMaxCells);
                 }
 
-                if (tool == "cell_write_range" || tool == "cell_fill_formula")
+                if (tool == "cell_write_range" || tool == "cell_fill_formula" || tool == "cell_draw_pixels" || tool == "cell_draw_from_image")
                 {
                     if (!settings.AutoAllowSelectedBlankWrites)
                         return PermissionDecision.Confirm("未开启锁定选区内自动写入");
@@ -125,12 +134,25 @@ namespace AgentForExcel.Services
             var target = sheet?.get_Range(address);
             if (sheet == null || lockedRange == null || target == null)
                 return PermissionDecision.Confirm("无法解析锁定选区或目标区域");
+            JsonElement? shapeElement = null;
+            if (root.TryGetProperty("pixels", out var pixelsShape)) shapeElement = pixelsShape;
+            else if (root.TryGetProperty("values", out var valuesShape)) shapeElement = valuesShape;
 
-            if (root.TryGetProperty("values", out var values) &&
-                target.Rows.Count == 1 && target.Columns.Count == 1)
+            if (shapeElement.HasValue && target.Rows.Count == 1 && target.Columns.Count == 1)
             {
-                GetValueShape(values, out var rows, out var columns);
+                GetValueShape(shapeElement.Value, out var rows, out var columns);
                 if (rows > 1 || columns > 1) target = target.get_Resize(rows, columns);
+            }
+
+            if (target.Rows.Count == 1 && target.Columns.Count == 1 &&
+                root.TryGetProperty("grid_width", out var gridWidth) &&
+                root.TryGetProperty("grid_height", out var gridHeight) &&
+                gridWidth.ValueKind == JsonValueKind.Number &&
+                gridHeight.ValueKind == JsonValueKind.Number)
+            {
+                var gridRows = (int)gridHeight.GetDouble();
+                var gridColumns = (int)gridWidth.GetDouble();
+                if (gridRows > 1 || gridColumns > 1) target = target.get_Resize(gridRows, gridColumns);
             }
 
             var targetCells = Convert.ToInt64(target.CountLarge);

@@ -51,7 +51,7 @@ namespace AgentForExcel.Operations.Dashboard
         {
             var source = (string.IsNullOrWhiteSpace(_sourceSheet) ? "活动工作表" : "工作表「" + _sourceSheet + "」") + "!" + _sourceAddress;
             var mode = _filterMode == "dropdown" ? "下拉兼容筛选" : "原生切片器";
-            return $"根据 {source} 创建联动数据看板「{_title}」，包含 KPI、趋势、排名、占比、明细透视表和 {_filterFields.Length} 个全局筛选器（{mode}）；源数据不会被修改";
+            return $"根据 {source} 创建联动数据看板「{_title}」，包含 KPI、趋势、排名、占比、对比、明细透视表和 {_filterFields.Length} 个全局筛选器（{mode}）；源数据不会被修改";
         }
 
         public string Execute(AppContext context)
@@ -108,6 +108,11 @@ namespace AgentForExcel.Operations.Dashboard
                     cache, supportSheet, "S20", "AgentShare", shareDimension,
                     "指标值", ParseAggregation(_aggregation), true, 0);
                 pivots.Add(sharePivot);
+                var compareDimension = !string.IsNullOrWhiteSpace(_seriesField) ? _seriesField : _categoryField;
+                var comparePivot = BuildBreakdownPivot(
+                    cache, supportSheet, "AC20", "AgentCompare", compareDimension,
+                    "指标值", ParseAggregation(_aggregation), true, 0);
+                pivots.Add(comparePivot);
 
                 var detailPivot = BuildDetailPivot(cache, dashboardSheet, "A64", "AgentDetail");
                 pivots.Add(detailPivot);
@@ -151,6 +156,8 @@ namespace AgentForExcel.Operations.Dashboard
                     (!string.IsNullOrWhiteSpace(_dateField) ? _dateField + "趋势" : trendDimension + "分布"), ChartStyle.Trend);
                 CreateChart(dashboardSheet, sharePivot, "A36", "G54", XlChartType.xlDoughnut,
                     shareDimension + "占比", ChartStyle.Share);
+                CreateChart(dashboardSheet, comparePivot, "H36", "N54", XlChartType.xlColumnClustered,
+                    compareDimension + "对比", ChartStyle.Comparison);
 
                 if (actualFilterMode == "dropdown")
                     DashboardInteractionManager.RefreshDashboard(workbook, dashboardSheet.Name);
@@ -162,7 +169,7 @@ namespace AgentForExcel.Operations.Dashboard
 
                 var modeText = actualFilterMode == "slicer" ? "原生切片器" :
                     actualFilterMode == "dropdown" ? "公式卡片＋下拉兼容筛选" : "无筛选器";
-                return $"已创建联动数据看板「{dashboardSheet.Name}」，包含 3 个 KPI、3 个动态透视图、{_filterFields.Length} 个全局筛选器和 1 个明细透视表；当前使用{modeText}，源工作表未修改。";
+                return $"已创建联动数据看板「{dashboardSheet.Name}」，包含 3 个 KPI、4 个动态透视图、{_filterFields.Length} 个全局筛选器和 1 个明细透视表；当前使用{modeText}，源工作表未修改。";
             }
             catch
             {
@@ -421,7 +428,7 @@ namespace AgentForExcel.Operations.Dashboard
             Try(() =>
             {
                 dynamic series = chart.SeriesCollection(1);
-                var color = style == ChartStyle.Trend ? "#2F80ED" : "#168653";
+                var color = style == ChartStyle.Trend ? "#2F80ED" : style == ChartStyle.Comparison ? "#5C8FD6" : "#168653";
                 if (style == ChartStyle.Trend)
                 {
                     series.Format.Line.ForeColor.RGB = ToOle(color);
@@ -627,6 +634,8 @@ namespace AgentForExcel.Operations.Dashboard
             {
                 if (i == seedIndex) continue;
                 if (IsPivotConnected(slicerCache, pivots[i])) continue;
+                if (Convert.ToInt32(pivots[i].CacheIndex) == Convert.ToInt32(seedPivot.CacheIndex))
+                    continue;
                 try
                 {
                     pivots[i].ChangePivotCache((PivotCache)seedPivot.PivotCache());
@@ -750,7 +759,8 @@ namespace AgentForExcel.Operations.Dashboard
         {
             Ranking,
             Trend,
-            Share
+            Share,
+            Comparison
         }
 
         public sealed class Factory : IOperationFactory

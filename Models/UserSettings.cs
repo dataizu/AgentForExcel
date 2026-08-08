@@ -71,13 +71,13 @@ namespace AgentForExcel.Models
             set => SetField(ref _requireConfirmOnWrite, value);
         }
 
-        /// <summary>ask_every_time / safe_auto / custom。</summary>
+        /// <summary>auto / ask_every_time / safe_auto / custom。</summary>
         public string AutomationMode
         {
             get => _automationMode;
             set
             {
-                var normalized = value == "ask_every_time" || value == "custom" ? value : "safe_auto";
+                var normalized = value == "ask_every_time" || value == "custom" || value == "auto" ? value : "safe_auto";
                 SetField(ref _automationMode, normalized);
             }
         }

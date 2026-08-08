@@ -168,8 +168,9 @@
                             <Border Style="{StaticResource SectionCard}">
                                 <StackPanel>
                                     <TextBlock Text="自动化权限" FontSize="13.5" FontWeight="SemiBold" Foreground="#183128"/>
-                                    <TextBlock Text="“安全自动化”只自动执行新工作表输出，以及锁定选区内的空白写入和格式化。" FontSize="10.5" Foreground="#68766F" TextWrapping="Wrap" Margin="0,4,0,9"/>
-                                    <ComboBox x:Name="AutomationModeCombo" Width="270" HorizontalAlignment="Left" SelectedValuePath="Tag">
+                                    <TextBlock Text="“自动执行”免确认运行常规读写；”安全自动化“仅自动执行新工作表输出与锁定选区内的空白写入/格式化。" FontSize="10.5" Foreground="#68766F" TextWrapping="Wrap" Margin="0,4,0,9"/>
+                                    <ComboBox x:Name="AutomationModeCombo" Width="300" HorizontalAlignment="Left" SelectedValuePath="Tag">
+                                        <ComboBoxItem Content="自动执行（危险操作仍确认）" Tag="auto"/>
                                         <ComboBoxItem Content="安全自动化（推荐）" Tag="safe_auto"/>
                                         <ComboBoxItem Content="每次写入都询问" Tag="ask_every_time"/>
                                         <ComboBoxItem Content="自定义规则" Tag="custom"/>
@@ -182,7 +183,7 @@
                                         <TextBox x:Name="AutoWriteLimitBox" Width="84" Margin="10,0,6,0" Padding="7,4"/>
                                         <TextBlock Text="个单元格" FontSize="10.8" Foreground="#68766F" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBlock Text="覆盖已有内容、跨出锁定选区、刷新查询/模型、Power Pivot 关系与 DAX、VBA 执行仍会询问。" FontSize="10.5" Foreground="#9A5B2D" TextWrapping="Wrap" Margin="0,9,0,0"/>
+                                    <TextBlock Text="无论哪种模式，VBA、刷新查询/模型、Power Pivot 关系与 DAX、覆盖 Power Query 查询定义仍会询问；其他写操作是否询问取决于所选模式。" FontSize="10.5" Foreground="#9A5B2D" TextWrapping="Wrap" Margin="0,9,0,0"/>
                                 </StackPanel>
                             </Border>
                             <Border Style="{StaticResource SectionCard}">
@@ -283,7 +284,8 @@
                             <Border Style="{StaticResource SectionCard}">
                                 <StackPanel>
                                     <TextBlock Text="Agent for Excel" FontSize="13.5" FontWeight="SemiBold" Foreground="#183128"/>
-                                    <TextBlock Text="版本 1.0.0 · Excel VSTO 数据分析与自动化 Agent" FontSize="10.5" Foreground="#68766F" Margin="0,5,0,10"/>
+                                    <TextBlock x:Name="EditionStatus" FontSize="10.5" Foreground="#405248" TextWrapping="Wrap" Margin="0,5,0,10"/>
+                                    <TextBlock x:Name="VersionStatus" FontSize="10.5" Foreground="#68766F" Margin="0,5,0,10"/>
                                     <Button Content="打开本机日志目录" Style="{StaticResource SmallButton}" HorizontalAlignment="Left" Click="OpenLogFolder_Click"/>
                                 </StackPanel>
                             </Border>

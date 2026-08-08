@@ -6,6 +6,7 @@
     <AssemblyName>AgentForExcel.Stage1Smoke</AssemblyName>
     <RootNamespace>AgentForExcel.Stage1Smoke</RootNamespace>
     <OutputPath>..\..\bin\Debug\Stage1Smoke\</OutputPath>
+    <Prefer32Bit>false</Prefer32Bit>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
   </PropertyGroup>

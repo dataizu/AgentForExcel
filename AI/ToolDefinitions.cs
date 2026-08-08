@@ -117,6 +117,36 @@ namespace AgentForExcel.AI
                     new { name = "autofit_rows", type = "boolean", description = "是否自适应行高" }
                 },
                 required: new[] { "address" }));
+            tools.Add(MakeTool(
+                name: "cell_draw_pixels",
+                description: "在指定位置一次性绘制像素画：传入 #RRGGBB 二维颜色矩阵，自动设置列宽行高，并把每行同色连续段合并后填色。pixels 中空字符串(\"\")或 null 表示跳过、保持空白。pixel_width/pixel_height 单位均为磅(pt)，默认 12×12，像素格为正方形、显示不变形；建议先画小图(如 8×8 或 16×16)验证，再放大或改用更大像素尺寸。适合像素图、图标、字符画、品牌形象图等。",
+                props: new object[]
+                {
+                    new { name = "sheet", type = "string", description = "工作表名(可选,默认为活动工作表)" },
+                    new { name = "address", type = "string", description = "像素画左上角单元格,如 B2" },
+                    new { name = "pixels", type = "array", description = "二维颜色矩阵,每行为 #RRGGBB 字符串数组;空串\"\"或 null 跳过", items = new { type = "array", items = new { type = "string" } } },
+                    new { name = "pixel_width", type = "number", description = "每个像素的宽度(磅,pt),默认 12;与 pixel_height 相同即为正方形" },
+                    new { name = "pixel_height", type = "number", description = "每个像素的高度(磅,pt),默认 12;与 pixel_width 相同即为正方形" },
+                    new { name = "hide_gridlines", type = "boolean", description = "是否隐藏网格线让像素画更清晰,默认 true" }
+                },
+                required: new[] { "address", "pixels" }));
+            tools.Add(MakeTool(
+                name: "cell_draw_from_image",
+                description: "从本地图片文件读取并转换为像素画：按 grid_width × grid_height 网格把图片高质量缩放采样成色值矩阵，再用与 cell_draw_pixels 相同的管线一次性画入工作表。适合把图片、Logo、像素角色画到 Excel。可选 palette 做最近色量化(像素画风格)；透明区域(alpha<128)自动跳过、保持空白。",
+                props: new object[]
+                {
+                    new { name = "sheet", type = "string", description = "工作表名(可选,默认为活动工作表)" },
+                    new { name = "address", type = "string", description = "像素画左上角单元格,如 B2" },
+                    new { name = "image_path", type = "string", description = "本地图片文件的完整路径,如 D:/pics/mario.png;支持 png/jpg/jpeg/bmp/gif,上限 50 MB" },
+                    new { name = "grid_width", type = "integer", description = "横向像素格数量(列数),建议与图片宽高比接近;grid_height × grid_width ≤ 50000" },
+                    new { name = "grid_height", type = "integer", description = "纵向像素格数量(行数),建议与图片宽高比接近;grid_height × grid_width ≤ 50000" },
+                    new { name = "pixel_width", type = "number", description = "每个像素的宽度(磅,pt),默认 12;与 pixel_height 相同即为正方形" },
+                    new { name = "pixel_height", type = "number", description = "每个像素的高度(磅,pt),默认 12;与 pixel_width 相同即为正方形" },
+                    new { name = "palette", type = "array", description = "可选调色板,#RRGGBB 字符串数组;提供后每个格子取最近的调色板颜色,呈现像素画风格", items = new { type = "string" } },
+                    new { name = "interpolation", type = "string", description = "采样方式:nearest(默认,最近邻,像素画清晰、颜色精确)或 bilinear(双线性,平滑柔和,适合照片)" },
+                    new { name = "hide_gridlines", type = "boolean", description = "是否隐藏网格线让像素画更清晰,默认 true" }
+                },
+                required: new[] { "address", "image_path", "grid_width", "grid_height" }));
 
             tools.Add(MakeTool(
                 name: "analysis_create_view",
@@ -210,7 +240,7 @@ namespace AgentForExcel.AI
 
             tools.Add(MakeTool(
                 name: "dashboard_create",
-                description: "根据标准二维表创建原生 Excel 联动数据看板。生成 3 个 KPI、动态透视图、明细透视表和最多 3 个全局筛选器。默认优先使用原生切片器，失败时自动改用下拉兼容模式；高级联动由加载项执行，不注入 VBA。源工作表不会被修改。",
+                description: "根据标准二维表创建原生 Excel 联动数据看板。生成 3 个 KPI、4 个动态透视图、明细透视表和最多 3 个全局筛选器。默认优先使用原生切片器，失败时自动改用下拉兼容模式；高级联动由加载项执行，不注入 VBA。源工作表不会被修改。",
                 props: new object[]
                 {
                     new { name = "source_sheet", type = "string", description = "数据源工作表名(可选,默认为活动工作表)" },

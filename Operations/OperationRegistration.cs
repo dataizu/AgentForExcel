@@ -23,6 +23,8 @@ namespace AgentForExcel.Operations
             dispatcher.Register(new Cell.WriteRangeOp.Factory());
             dispatcher.Register(new Cell.FillFormulaOp.Factory());
             dispatcher.Register(new Cell.FormatRangeOp.Factory());
+            dispatcher.Register(new Cell.DrawPixelsOp.Factory());
+            dispatcher.Register(new Cell.DrawFromImageOp.Factory());
             dispatcher.Register(new Analysis.CreateAnalysisViewOp.Factory());
 
             // ---- 阶段 3:图表与普通数据透视表 ----
