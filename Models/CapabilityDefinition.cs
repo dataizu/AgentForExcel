@@ -10,5 +10,6 @@ namespace AgentForExcel.Models
         public string Prompt { get; set; }
         public string Badge { get; set; }
         public string Accent { get; set; }
+        public ProductEdition MinimumEdition { get; set; }
     }
 }

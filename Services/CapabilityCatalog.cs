@@ -57,7 +57,8 @@ namespace AgentForExcel.Services
                 Description = description,
                 Prompt = prompt,
                 Badge = badge,
-                Accent = accent
+                Accent = accent,
+                MinimumEdition = EditionPolicy.GetMinimumEditionForCapability(id)
             };
         }
     }

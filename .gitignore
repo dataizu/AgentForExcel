@@ -37,3 +37,6 @@ conversations.json
 *.xlsb
 *.xls
 ~$*
+
+# Marketing site local dependencies
+marketing-site/node_modules/

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using AgentForExcel.Models;
+using AgentForExcel.Services;
 using Microsoft.Office.Interop.Excel;
 
 namespace AgentForExcel.Operations.SystemCheck
@@ -17,6 +19,9 @@ namespace AgentForExcel.Operations.SystemCheck
             var application = context?.Excel;
             if (application == null) throw new InvalidOperationException("Excel 应用程序上下文不可用。");
             var warnings = new List<string>();
+            var runtime = RuntimeEnvironmentInspector.Capture();
+            var edition = ProductEditionInfo.Current;
+            var apiConfigured = !string.IsNullOrWhiteSpace(context?.Settings?.ApiKey);
             var workbook = application.ActiveWorkbook;
             if (workbook == null)
             {
@@ -28,6 +33,11 @@ namespace AgentForExcel.Operations.SystemCheck
                     power_query = false,
                     power_pivot = false,
                     vba_project_access = false,
+                    edition = ProductEditionInfo.Id,
+                    edition_name = ProductEditionInfo.CurrentDisplayName,
+                    edition_description = ProductEditionInfo.Description(edition),
+                    api_configured = apiConfigured,
+                    runtime,
                     warnings
                 });
             }
@@ -78,6 +88,11 @@ namespace AgentForExcel.Operations.SystemCheck
                 power_pivot = powerPivot,
                 model_table_count = modelTableCount,
                 vba_project_access = vbaAccess,
+                edition = ProductEditionInfo.Id,
+                edition_name = ProductEditionInfo.CurrentDisplayName,
+                edition_description = ProductEditionInfo.Description(edition),
+                api_configured = apiConfigured,
+                runtime,
                 warnings
             });
         }

@@ -11,6 +11,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using AgentForExcel.AI;
 using AgentForExcel.Models;
 using AgentForExcel.Operations;
@@ -27,6 +28,7 @@ namespace AgentForExcel.UI
     /// </summary>
     public partial class ChatView : UserControl
     {
+        private const int StreamingRenderIntervalMilliseconds = 120;
         private AppContext _app;
         private readonly ObservableCollection<ChatMessage> _messages = new ObservableCollection<ChatMessage>();
         private readonly List<ChatTurn> _history = new List<ChatTurn>();
@@ -35,6 +37,7 @@ namespace AgentForExcel.UI
         private ChatConversation _activeConversation;
         private bool _updatingModelPicker;
         private bool _isBusy;
+        private bool _scrollToBottomPending;
 
         public ChatView()
         {
@@ -133,12 +136,19 @@ namespace AgentForExcel.UI
             SetInputEnabled(false);
 
             var thinking = AddStatus("正在分析工作簿…");
+            var chatTimer = Stopwatch.StartNew();
+            var chatOutcome = "exception";
+            var chatRounds = 0;
+            var chatToolCalls = 0;
+            var streamedCharacters = 0;
+            var streamedRenderCount = 0;
 
             try
             {
                 // 1) 校验配置
                 if (string.IsNullOrWhiteSpace(_app.Settings.ApiKey))
                 {
+                    chatOutcome = "configuration_missing";
                     thinking.Kind = ChatMessageKind.Text;
                     thinking.Text = "尚未配置大模型 API Key。请打开右上角设置，在“模型与连接”中填写后再试。";
                     return;
@@ -164,8 +174,12 @@ namespace AgentForExcel.UI
                             delta =>
                             {
                                 streamedText.Append(delta);
-                                if (renderTimer.ElapsedMilliseconds < 35) return;
+                                streamedCharacters += delta?.Length ?? 0;
+                                // MarkdownViewer 每次更新都会重建完整的 WPF 视觉树；限频可避免
+                                // 长回复把 UI 线程和滚动队列占满，最终答复仍会立即完整渲染。
+                                if (renderTimer.ElapsedMilliseconds < StreamingRenderIntervalMilliseconds) return;
                                 SetAssistantText(currentStatus, streamedText.ToString());
+                                streamedRenderCount++;
                                 renderTimer.Restart();
                             });
                     },
@@ -218,6 +232,10 @@ namespace AgentForExcel.UI
                         ScrollToBottom();
                     });
 
+                chatRounds = run.Rounds;
+                chatToolCalls = run.ToolCallCount;
+                chatOutcome = run.Completed ? "completed" : "guard_stopped";
+
                 if (!run.Completed)
                 {
                     preserveTaskSelectionLock = true;
@@ -229,6 +247,7 @@ namespace AgentForExcel.UI
             }
             catch (Exception ex)
             {
+                chatOutcome = "exception";
                 if (thinking.Kind == ChatMessageKind.Status)
                     SetAssistantText(thinking, "分析失败：" + ex.Message);
                 else
@@ -236,6 +255,13 @@ namespace AgentForExcel.UI
             }
             finally
             {
+                chatTimer.Stop();
+                PerformanceLogger.Log(
+                    "chat_run",
+                    chatTimer.ElapsedMilliseconds,
+                    "outcome=" + chatOutcome + "|rounds=" + chatRounds +
+                    "|tool_calls=" + chatToolCalls + "|stream_chars=" + streamedCharacters +
+                    "|stream_renders=" + streamedRenderCount);
                 if (!preserveTaskSelectionLock && _app.Selection.LockOwner == "task")
                     _app.Selection.Unlock("task");
                 PersistActiveConversation();
@@ -646,10 +672,13 @@ namespace AgentForExcel.UI
 
         private void ScrollToBottom()
         {
+            if (_scrollToBottomPending) return;
+            _scrollToBottomPending = true;
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                MessagesScroll.ScrollToBottom();
-            }));
+                try { MessagesScroll.ScrollToBottom(); }
+                finally { _scrollToBottomPending = false; }
+            }), DispatcherPriority.Background);
         }
 
         private void SetInputEnabled(bool enabled)
@@ -969,12 +998,24 @@ namespace AgentForExcel.UI
                     currentCategory = capability.Category;
                     AddCapabilityCategory(currentCategory);
                 }
-                AddPromptCard(
-                    capability.Title,
-                    capability.Description,
-                    capability.Prompt,
-                    capability.Badge,
-                    capability.Accent);
+                var available = EditionPolicy.IsCapabilityAvailable(capability.Id, ProductEditionInfo.Current);
+                if (available)
+                {
+                    AddPromptCard(
+                        capability.Title,
+                        capability.Description,
+                        capability.Prompt,
+                        capability.Badge,
+                        capability.Accent);
+                }
+                else
+                {
+                    AddStatusCard(
+                        capability.Title,
+                        capability.Description,
+                        ProductEditionInfo.DisplayName(capability.MinimumEdition),
+                        "#8A6A2F");
+                }
             }
         }
 
@@ -1157,6 +1198,7 @@ namespace AgentForExcel.UI
 
             switch (_app.Settings.AutomationMode)
             {
+                case "auto": AutomationModeText.Text = "自动执行"; break;
                 case "ask_every_time": AutomationModeText.Text = "每次询问"; break;
                 case "custom": AutomationModeText.Text = "自定义权限"; break;
                 default: AutomationModeText.Text = "安全自动"; break;

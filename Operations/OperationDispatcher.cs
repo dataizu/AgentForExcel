@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading.Tasks;
+using AgentForExcel.Models;
+using AgentForExcel.Services;
 
 namespace AgentForExcel.Operations
 {
@@ -37,16 +40,29 @@ namespace AgentForExcel.Operations
             var results = new List<string>();
             foreach (var call in calls)
             {
+                var toolName = call?.ToolName ?? "unknown";
+                var operationTimer = Stopwatch.StartNew();
+                var outcome = "completed";
                 try
                 {
                     // Excel COM 对象必须留在创建它的 UI/STA 线程上执行。
                     // 不使用 Task.Run，避免跨线程 COM 调用导致随机失败或 Excel 卡死。
                     string result = ExecuteOne(call, confirmCallback);
+                    outcome = ClassifyOutcome(result);
                     results.Add(result);
                 }
                 catch (Exception ex)
                 {
-                    results.Add($"[{call.ToolName}] 执行失败：{ex.Message}");
+                    outcome = "exception";
+                    results.Add($"[{toolName}] 执行失败：{ex.Message}");
+                }
+                finally
+                {
+                    operationTimer.Stop();
+                    PerformanceLogger.Log(
+                        "operation",
+                        operationTimer.ElapsedMilliseconds,
+                        "tool=" + toolName + "|outcome=" + outcome);
                 }
             }
             return Task.FromResult<IReadOnlyList<string>>(results);
@@ -54,6 +70,10 @@ namespace AgentForExcel.Operations
 
         private string ExecuteOne(OperationCall call, Func<string, bool> confirmCallback)
         {
+            var editionReason = GetEditionDisabledReason(call?.ToolName);
+            if (editionReason != null)
+                return $"[{call.ToolName}] 已阻止：{editionReason}";
+
             var disabledReason = GetDisabledReason(call?.ToolName, ThisAddIn.App?.Settings);
             if (disabledReason != null)
                 return $"[{call.ToolName}] 已阻止：{disabledReason}。可在“设置 → 执行与安全”中重新开启。";
@@ -99,6 +119,23 @@ namespace AgentForExcel.Operations
             if (toolName.StartsWith("vba_", StringComparison.OrdinalIgnoreCase) && !settings.EnableVba)
                 return "受控 VBA 能力已关闭";
             return null;
+        }
+
+        private static string GetEditionDisabledReason(string toolName)
+        {
+            return EditionPolicy.IsToolAvailable(toolName, ProductEditionInfo.Current)
+                ? null
+                : EditionPolicy.GetUnavailableReason(toolName, ProductEditionInfo.Current);
+        }
+
+        private static string ClassifyOutcome(string result)
+        {
+            if (string.IsNullOrWhiteSpace(result)) return "completed";
+            if (result.StartsWith("已跳过", StringComparison.Ordinal)) return "skipped";
+            if (result.StartsWith("未知工具", StringComparison.Ordinal)) return "unknown_tool";
+            if (result.Contains("已阻止")) return "blocked";
+            if (result.Contains("参数解析失败")) return "parse_failed";
+            return "completed";
         }
     }
 

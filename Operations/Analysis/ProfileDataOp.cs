@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentForExcel.Services;
 using Microsoft.Office.Interop.Excel;
 
 namespace AgentForExcel.Operations.Analysis
@@ -41,7 +43,12 @@ namespace AgentForExcel.Operations.Analysis
             if (columnCount > 100 || (long)rowCount * columnCount > 500000)
                 throw new ArgumentException("单次数据体检最多支持 100 列或 500,000 个单元格，请缩小范围或分批检查。");
 
-            var headers = ValidateHeaders(range, columnCount);
+            // 一次读取二维区域，后续分析仅访问托管数组。逐格访问 Excel COM 会在大表上
+            // 产生几十万次跨进程调用，是此前数据体检卡顿的主要来源。
+            var profileTimer = Stopwatch.StartNew();
+            var rawValues = range.Value2;
+            var matrix = rawValues as object[,];
+            var headers = ValidateHeaders(matrix, rawValues, columnCount);
             var fields = new List<FieldProfile>();
             var warnings = new List<string>();
             var derivedDimensions = new List<string>();
@@ -49,7 +56,7 @@ namespace AgentForExcel.Operations.Analysis
 
             for (var column = 1; column <= columnCount; column++)
             {
-                var profile = ProfileColumn(range, column, headers[column - 1], rowCount - 1);
+                var profile = ProfileColumn(matrix, rawValues, column, headers[column - 1], rowCount - 1);
                 fields.Add(profile);
                 AddFieldWarnings(profile, warnings);
                 if (profile.InferredType == "date")
@@ -58,7 +65,7 @@ namespace AgentForExcel.Operations.Analysis
 
             for (var row = 2; row <= rowCount; row++)
             {
-                var signature = BuildRowSignature(range, row, columnCount);
+                var signature = BuildRowSignature(matrix, rawValues, row, columnCount);
                 int count;
                 rowSignatures.TryGetValue(signature, out count);
                 rowSignatures[signature] = count + 1;
@@ -103,16 +110,22 @@ namespace AgentForExcel.Operations.Analysis
                     "高基数字段不得直接作为分类轴，应先派生时间粒度、分箱、Top-N 或业务分组。"
                 }
             };
+            profileTimer.Stop();
+            PerformanceLogger.Log(
+                "data_profile",
+                profileTimer.ElapsedMilliseconds,
+                "rows=" + (rowCount - 1) + "|columns=" + columnCount +
+                "|cells=" + ((long)rowCount * columnCount) + "|duplicate_rows=" + duplicateRows);
             return PayloadPrefix + JsonSerializer.Serialize(payload);
         }
 
-        private static List<string> ValidateHeaders(Range range, int columnCount)
+        private static List<string> ValidateHeaders(object[,] matrix, object rawValue, int columnCount)
         {
             var headers = new List<string>();
             var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var column = 1; column <= columnCount; column++)
             {
-                var header = Convert.ToString(((Range)range.Cells[1, column]).Value2)?.Trim();
+                var header = Convert.ToString(GetCellValue(matrix, rawValue, 1, column))?.Trim();
                 if (string.IsNullOrWhiteSpace(header)) throw new ArgumentException("数据体检区域存在空白字段名。");
                 if (!unique.Add(header)) throw new ArgumentException("数据体检区域存在重复字段名：「" + header + "」。");
                 headers.Add(header);
@@ -120,7 +133,7 @@ namespace AgentForExcel.Operations.Analysis
             return headers;
         }
 
-        private static FieldProfile ProfileColumn(Range range, int column, string header, int totalRows)
+        private static FieldProfile ProfileColumn(object[,] matrix, object rawValue, int column, string header, int totalRows)
         {
             var profile = new FieldProfile { Name = header, TotalRows = totalRows };
             var distinct = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -132,7 +145,7 @@ namespace AgentForExcel.Operations.Analysis
 
             for (var row = 2; row <= totalRows + 1; row++)
             {
-                var value = ((Range)range.Cells[row, column]).Value2;
+                var value = GetCellValue(matrix, rawValue, row, column);
                 var text = Normalize(value);
                 if (string.IsNullOrWhiteSpace(text))
                 {
@@ -232,15 +245,22 @@ namespace AgentForExcel.Operations.Analysis
             return count;
         }
 
-        private static string BuildRowSignature(Range range, int row, int columnCount)
+        private static string BuildRowSignature(object[,] matrix, object rawValue, int row, int columnCount)
         {
             var builder = new StringBuilder();
             for (var column = 1; column <= columnCount; column++)
             {
                 if (column > 1) builder.Append('\u001F');
-                builder.Append(Normalize(((Range)range.Cells[row, column]).Value2).ToLowerInvariant());
+                builder.Append(Normalize(GetCellValue(matrix, rawValue, row, column)).ToLowerInvariant());
             }
             return builder.ToString();
+        }
+
+        private static object GetCellValue(object[,] matrix, object rawValue, int row, int column)
+        {
+            if (matrix == null)
+                return row == 1 && column == 1 ? rawValue : null;
+            return matrix[matrix.GetLowerBound(0) + row - 1, matrix.GetLowerBound(1) + column - 1];
         }
 
         private static bool TryTemporal(object value, string text, string header, out DateTime date)

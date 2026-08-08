@@ -262,12 +262,16 @@ namespace AgentForExcel.Operations.PowerPivot
 
         private static dynamic CreateModelConnection(dynamic connections, string connectionName, string queryName, string connectionString)
         {
+            // Excel 为 Mashup/Power Query 生成的数据模型连接，会把查询标识作为
+            // 带双引号的 xlCmdTableCollection 命令文本传入。测试宿主必须与
+            // Excel 位宽一致；跨位宽调用会被 Mashup 解析成 "default" 假表。
+            var commandText = "\"" + queryName.Replace("\"", "\"\"") + "\"";
             return connections.Add2(
                 connectionName,
                 "Agent for Excel 数据模型连接 - " + queryName,
                 connectionString,
-                queryName,
-                6,
+                commandText,
+                XlCmdType.xlCmdTableCollection,
                 true,
                 false);
         }

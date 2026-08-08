@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using AgentForExcel.Models;
 using AgentForExcel.Operations;
+using AgentForExcel.Services;
 
 namespace AgentForExcel.UI
 {
@@ -74,6 +75,10 @@ namespace AgentForExcel.UI
             DefaultScopeCombo.SelectedValue = settings.DefaultAnalysisScope;
             StoragePathText.Text = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AgentForExcel");
+            VersionStatus.Text = "版本 " + GetType().Assembly.GetName().Version.ToString(3) + " · Excel VSTO 数据分析与自动化 Agent";
+            EditionStatus.Text = ProductEditionInfo.CurrentDisplayName + " · " +
+                                 ProductEditionInfo.Description(ProductEditionInfo.Current) +
+                                 "\n当前为本地能力分级；在线订阅、支付和激活尚未接入。";
             TempSlider.ValueChanged += TempSlider_ValueChanged;
 
             _selectedProfile = _profiles.FirstOrDefault(profile => profile.Id == settings.ActiveProfileId) ?? _profiles.First();

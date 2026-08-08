@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using AgentForExcel.Services;
 using Microsoft.Office.Interop.Excel;
 
 namespace AgentForExcel.Operations.Cell
@@ -41,12 +43,16 @@ namespace AgentForExcel.Operations.Cell
                 ? sheet.UsedRange
                 : sheet.get_Range(_address);
 
-            var raw = range.Value2;
-            var matrix = raw as object[,];
             var totalRows = Convert.ToInt32(range.Rows.Count);
             var totalColumns = Convert.ToInt32(range.Columns.Count);
             var shownRows = Math.Min(totalRows, 12);
             var shownColumns = Math.Min(totalColumns, 8);
+            // 聊天内只展示 12 x 8 预览。不要为了预览而把完整 UsedRange 复制进托管内存。
+            var previewRange = range.get_Resize(shownRows, shownColumns);
+            var readTimer = Stopwatch.StartNew();
+            var raw = previewRange.Value2;
+            readTimer.Stop();
+            var matrix = raw as object[,];
             var rows = new List<List<string>>();
 
             for (var row = 1; row <= shownRows; row++)
@@ -85,6 +91,11 @@ namespace AgentForExcel.Operations.Cell
                 headers,
                 rows
             };
+            PerformanceLogger.Log(
+                "range_read",
+                readTimer.ElapsedMilliseconds,
+                "rows=" + totalRows + "|columns=" + totalColumns +
+                "|preview_rows=" + shownRows + "|preview_columns=" + shownColumns);
             return TablePayloadPrefix + JsonSerializer.Serialize(payload);
         }
 
