@@ -12,6 +12,70 @@
                   screentip="切换 AI 对话面板"
                   supertip="点击显示或隐藏右侧的 Agent 对话面板"/>
         </group>
+        <group id="QuickAnalysisGroup" label="快速分析">
+          <button id="QualityButton"
+                  label="数据体检"
+                  imageMso="DataValidation"
+                  onAction="Capability_Click"
+                  screentip="数据质量体检"
+                  supertip="将数据质量体检任务填入 AI 面板；不会自动发送或修改工作簿。"/>
+          <button id="TrendButton"
+                  label="趋势异常"
+                  imageMso="ChartTrendline"
+                  onAction="Capability_Click"
+                  screentip="趋势与异常"
+                  supertip="将趋势与异常分析任务填入 AI 面板；不会自动发送或修改工作簿。"/>
+        </group>
+        <group id="PivotGroup" label="数据透视">
+          <button id="PivotButton"
+                  label="创建透视表"
+                  imageMso="PivotTableInsert"
+                  onAction="Capability_Click"
+                  screentip="数据透视表"
+                  supertip="将数据透视表任务填入 AI 面板；发送前可继续编辑并确认计划。"/>
+          <button id="DashboardButton"
+                  label="联动看板"
+                  imageMso="PivotChartInsert"
+                  onAction="Capability_Click"
+                  screentip="联动数据看板"
+                  supertip="将联动数据看板任务填入 AI 面板；发送前可继续编辑并确认计划。"/>
+        </group>
+        <group id="PowerQueryGroup" label="Power Query">
+          <button id="PowerQueryButton"
+                  label="清洗数据"
+                  imageMso="RefreshAll"
+                  onAction="Capability_Click"
+                  screentip="Power Query 清洗"
+                  supertip="将 Power Query 清洗任务填入 AI 面板；不会自动执行。"/>
+        </group>
+        <group id="AutomationGroup" label="安全自动化">
+          <button id="RefreshButton"
+                  label="刷新全部"
+                  imageMso="RefreshAll"
+                  onAction="Capability_Click"
+                  screentip="刷新全部"
+                  supertip="将受控刷新任务填入 AI 面板；执行前仍需预览并确认。"/>
+          <button id="AutofitButton"
+                  label="自动列宽"
+                  imageMso="AutoFitColumnWidth"
+                  onAction="Capability_Click"
+                  screentip="统一自动列宽"
+                  supertip="将受控自动列宽任务填入 AI 面板；执行前仍需预览并确认。"/>
+          <button id="ExportPdfButton"
+                  label="导出 PDF"
+                  imageMso="FileSaveAsPdfOrXps"
+                  onAction="Capability_Click"
+                  screentip="导出当前表 PDF"
+                  supertip="将受控 PDF 导出任务填入 AI 面板；执行前仍需确认路径。"/>
+        </group>
+        <group id="AdvancedToolsGroup" label="高级工具">
+          <button id="PowerPivotButton"
+                  label="Power Pivot"
+                  imageMso="PivotTableInsert"
+                  onAction="Capability_Click"
+                  screentip="Power Pivot 与 DAX"
+                  supertip="将 Power Pivot 与 DAX 任务填入 AI 面板；不会自动执行。"/>
+        </group>
       </tab>
     </tabs>
   </ribbon>

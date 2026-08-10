@@ -21,8 +21,18 @@
             <Border Background="#17734A" BorderBrush="#17734A" BorderThickness="1"
                     CornerRadius="14,14,4,14" Padding="12,9" MaxWidth="300"
                     HorizontalAlignment="Right" Margin="42,5,6,5">
-                <TextBlock Text="{Binding Text}" Foreground="White" TextWrapping="Wrap"
-                           FontSize="12.5" LineHeight="19"/>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding Text}" Foreground="White" TextWrapping="Wrap"
+                               FontSize="12.5" LineHeight="19"/>
+                    <Button Grid.Row="1" Width="42" Height="24" Margin="0,6,0,0"
+                            HorizontalAlignment="Right" Style="{DynamicResource IconButtonStyle}"
+                            Content="复制" Click="CopyMessage_Click"
+                            ToolTip="复制这条消息" AutomationProperties.Name="复制消息"/>
+                </Grid>
             </Border>
         </DataTemplate>
 
@@ -30,7 +40,17 @@
             <Border Background="#FFFEFC" BorderBrush="#E0E6E2" BorderThickness="1"
                     CornerRadius="14,14,14,4" Padding="12,9" MaxWidth="304"
                     HorizontalAlignment="Left" Margin="6,5,36,5">
-                <controls:MarkdownViewer Text="{Binding Text}"/>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <controls:MarkdownViewer Text="{Binding Text}"/>
+                    <Button Grid.Row="1" Width="42" Height="24" Margin="0,6,0,0"
+                            HorizontalAlignment="Right" Style="{DynamicResource IconButtonStyle}"
+                            Content="复制" Click="CopyMessage_Click"
+                            ToolTip="复制这条消息" AutomationProperties.Name="复制消息"/>
+                </Grid>
             </Border>
         </DataTemplate>
 
@@ -107,9 +127,20 @@
                                     </Grid.ColumnDefinitions>
                                     <Border Width="18" Height="18" CornerRadius="9" BorderThickness="1"
                                             BorderBrush="{Binding StatusBrush}" VerticalAlignment="Top">
-                                        <TextBlock Text="{Binding Glyph}" FontSize="10" FontWeight="SemiBold"
-                                                   Foreground="{Binding StatusBrush}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center"/>
+                                        <Grid Width="16" Height="16" ClipToBounds="False">
+                                            <TextBlock x:Name="GlyphText" Text="{Binding Glyph}" FontSize="10" FontWeight="SemiBold"
+                                                       Foreground="{Binding StatusBrush}" HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"/>
+                                            <Grid x:Name="ActivityOrbit" Width="16" Height="16"
+                                                  Visibility="Collapsed" RenderTransformOrigin="0.5,0.5">
+                                                <Grid.RenderTransform>
+                                                    <RotateTransform x:Name="ActivityRotation" Angle="0"/>
+                                                </Grid.RenderTransform>
+                                                <Ellipse Width="4" Height="4" Fill="#D18A2E"
+                                                         HorizontalAlignment="Center" VerticalAlignment="Top"
+                                                         Margin="0,1,0,0"/>
+                                            </Grid>
+                                        </Grid>
                                     </Border>
                                     <StackPanel Grid.Column="1">
                                         <TextBlock Text="{Binding Title}" FontSize="11" Foreground="#33463C"
@@ -118,6 +149,25 @@
                                                    TextWrapping="Wrap" Margin="0,1,0,0"/>
                                     </StackPanel>
                                 </Grid>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding Status}" Value="in_progress">
+                                        <Setter TargetName="GlyphText" Property="Visibility" Value="Collapsed"/>
+                                        <Setter TargetName="ActivityOrbit" Property="Visibility" Value="Visible"/>
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard Name="StepProgressStoryboard">
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="ActivityRotation"
+                                                                     Storyboard.TargetProperty="Angle"
+                                                                     From="0" To="360" Duration="0:0:1.2"
+                                                                     RepeatBehavior="Forever"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <RemoveStoryboard BeginStoryboardName="StepProgressStoryboard"/>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>

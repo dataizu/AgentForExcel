@@ -137,6 +137,139 @@ namespace AgentForExcel
             Log("Ribbon: 切换窗口 " + window.Hwnd + " 的面板 (Visible=" + pane.Visible + ")");
         }
 
+        /// <summary>
+        /// 显示当前窗口的任务窗格，并把能力目录中的提示词预填到 ChatView 输入框。
+        /// 该入口只准备对话内容，不发送消息，也不直接执行工作簿写操作。
+        /// </summary>
+        internal void PrefillCapabilityPrompt(string capabilityId)
+        {
+            if (string.IsNullOrWhiteSpace(capabilityId)) return;
+
+            var window = Application.ActiveWindow;
+            if (window == null)
+            {
+                MessageBox.Show(
+                    "当前没有可用的 Excel 工作簿窗口。",
+                    "Agent for Excel",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            AgentForExcel.Models.CapabilityDefinition capability = null;
+            foreach (var item in Services.CapabilityCatalog.Items)
+            {
+                if (string.Equals(item.Id, capabilityId, StringComparison.OrdinalIgnoreCase))
+                {
+                    capability = item;
+                    break;
+                }
+            }
+
+            if (capability == null)
+            {
+                Log("Ribbon: 预填时未找到能力目录项 " + capabilityId);
+                MessageBox.Show(
+                    "未找到该能力的提示词配置，请检查功能目录。",
+                    "Agent for Excel",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var pane = EnsureTaskPaneForWindow(window, false);
+                pane.Visible = true;
+
+                // 通过 CustomTaskPane -> TaskPaneHost -> ElementHost 找到当前窗口的 ChatView，
+                // 保持多窗口之间的任务窗格和输入状态彼此独立。
+                var chatView = FindChatView(pane);
+                var inputBox = FindChatInputBox(chatView);
+                if (inputBox == null)
+                {
+                    Log("Ribbon: 窗口 " + window.Hwnd + " 未找到 ChatView 输入框");
+                    MessageBox.Show(
+                        "AI 面板尚未准备好，请稍后重试。",
+                        "Agent for Excel",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
+                }
+
+                System.Action applyPrompt = () =>
+                {
+                    inputBox.Text = capability.Prompt ?? string.Empty;
+                    inputBox.CaretIndex = inputBox.Text.Length;
+                    inputBox.SelectionLength = 0;
+                    inputBox.Focus();
+                    System.Windows.Input.Keyboard.Focus(inputBox);
+                };
+
+                if (inputBox.Dispatcher.CheckAccess())
+                    applyPrompt();
+                else
+                    inputBox.Dispatcher.Invoke(applyPrompt);
+
+                Log("Ribbon: 已向窗口 " + window.Hwnd + " 预填能力 " + capability.Id);
+            }
+            catch (Exception ex)
+            {
+                Log("Ribbon: 预填能力 " + capabilityId + " 异常: " + ex);
+                MessageBox.Show(
+                    "AI 面板暂时不可用，请稍后重试。",
+                    "Agent for Excel",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        private static ChatView FindChatView(CustomTaskPane pane)
+        {
+            var host = pane?.Control as TaskPaneHost;
+            if (host == null) return null;
+
+            foreach (Control child in host.Controls)
+            {
+                var elementHost = child as ElementHost;
+                if (elementHost?.Child is ChatView chatView)
+                    return chatView;
+            }
+
+            return null;
+        }
+
+        private static System.Windows.Controls.TextBox FindChatInputBox(ChatView chatView)
+        {
+            if (chatView == null) return null;
+
+            var namedInput = chatView.FindName("InputBox") as System.Windows.Controls.TextBox;
+            if (namedInput != null) return namedInput;
+
+            return FindChatInputBoxInVisualTree(chatView);
+        }
+
+        private static System.Windows.Controls.TextBox FindChatInputBoxInVisualTree(
+            System.Windows.DependencyObject parent)
+        {
+            if (parent == null) return null;
+
+            var textBox = parent as System.Windows.Controls.TextBox;
+            var namedElement = parent as System.Windows.FrameworkElement;
+            if (textBox != null && string.Equals(namedElement?.Name, "InputBox", StringComparison.Ordinal))
+                return textBox;
+
+            var childCount = System.Windows.Media.VisualTreeHelper.GetChildrenCount(parent);
+            for (var index = 0; index < childCount; index++)
+            {
+                var result = FindChatInputBoxInVisualTree(
+                    System.Windows.Media.VisualTreeHelper.GetChild(parent, index));
+                if (result != null) return result;
+            }
+
+            return null;
+        }
+
         private void Application_WindowActivate(Excel.Workbook workbook, Excel.Window window)
         {
             try

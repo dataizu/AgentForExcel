@@ -302,6 +302,42 @@ namespace AgentForExcel.UI
             return m;
         }
 
+        private void CopyMessage_Click(object sender, RoutedEventArgs e)
+        {
+            var text = ((sender as FrameworkElement)?.DataContext as ChatMessage)?.Text;
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(() => CopyMessageText(text)));
+                return;
+            }
+
+            CopyMessageText(text);
+        }
+
+        private void CopyMessageText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                MessageBox.Show("此消息没有可复制的文本。", "复制消息",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            try
+            {
+                Clipboard.SetText(text);
+                MessageBox.Show("消息已复制到剪贴板。", "复制消息",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                // 仅记录异常类型，避免把消息文本或剪贴板内容写入日志。
+                ThisAddIn.Log("ChatView: 复制消息失败 (" + ex.GetType().Name + ")");
+                MessageBox.Show("复制失败，请重试。", "复制消息",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private ChatMessage AddStatus(string title)
         {
             var message = new ChatMessage(string.Empty, ChatRole.Assistant)
