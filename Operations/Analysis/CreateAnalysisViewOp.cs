@@ -40,6 +40,15 @@ namespace AgentForExcel.Operations.Analysis
 
         public string Execute(AppContext context)
         {
+            // 分析页会整块写入快照并做大量格式化,批量作用域抑制逐次重绘。
+            using (new ExcelBatchScope(context))
+            {
+                return ExecuteCore(context);
+            }
+        }
+
+        private string ExecuteCore(AppContext context)
+        {
             var sourceSheet = Cell.CellOperationSupport.GetWorksheet(context, _sourceSheet);
             var sourceRange = Cell.CellOperationSupport.GetRange(sourceSheet, _sourceAddress);
             if (sourceRange.Rows.Count < 2)

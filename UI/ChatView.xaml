@@ -597,7 +597,7 @@
                                 Style="{StaticResource IconButtonStyle}" Background="#168653"
                                 BorderBrush="#168653" Foreground="White" Click="SendButton_Click"
                                 ToolTip="发送" AutomationProperties.Name="发送消息">
-                            <TextBlock FontFamily="Segoe MDL2 Assets" Text="&#xE724;" FontSize="16"/>
+                            <TextBlock x:Name="SendButtonIcon" FontFamily="Segoe MDL2 Assets" Text="&#xE724;" FontSize="16"/>
                         </Button>
                     </Grid>
                     <Grid Grid.Row="1" Margin="0,5,0,0">

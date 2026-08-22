@@ -259,7 +259,9 @@ namespace AgentForExcel.Models
                     Id = profile.Id,
                     DisplayName = profile.DisplayName,
                     ProviderName = profile.ProviderName,
-                    ApiKey = profile.ApiKey,
+                    // API Key 以 DPAPI(当前用户)加密后落盘,避免明文密钥随配置文件
+                    // 被漫游同步、误分享或同用户进程直接读取;内存中仍是明文。
+                    ApiKey = ApiKeyProtector.Protect(profile.ApiKey),
                     BaseUrl = profile.BaseUrl,
                     Model = profile.Model,
                     Temperature = profile.Temperature
@@ -303,11 +305,58 @@ namespace AgentForExcel.Models
                 Id = profile.Id,
                 DisplayName = profile.DisplayName,
                 ProviderName = profile.ProviderName,
-                ApiKey = profile.ApiKey,
+                ApiKey = ApiKeyProtector.Unprotect(profile.ApiKey),
                 BaseUrl = profile.BaseUrl,
                 Model = profile.Model,
                 Temperature = profile.Temperature
             };
+        }
+
+        /// <summary>
+        /// API Key 的 DPAPI 加解密。加密绑定为当前 Windows 用户;
+        /// 未带 dpapi: 前缀的旧明文配置在读取时原样透传,保持向后兼容。
+        /// </summary>
+        private static class ApiKeyProtector
+        {
+            private const string Prefix = "dpapi:";
+            // 应用级附加熵:与 CurrentUser 作用域叠加,提高密文被其他程序复用的门槛。
+            private static readonly byte[] Entropy = System.Text.Encoding.UTF8.GetBytes("AgentForExcel.v1");
+
+            public static string Protect(string plain)
+            {
+                if (string.IsNullOrEmpty(plain) || plain.StartsWith(Prefix, StringComparison.Ordinal))
+                    return plain;
+                try
+                {
+                    var encrypted = System.Security.Cryptography.ProtectedData.Protect(
+                        System.Text.Encoding.UTF8.GetBytes(plain), Entropy,
+                        System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                    return Prefix + Convert.ToBase64String(encrypted);
+                }
+                catch
+                {
+                    // DPAPI 在个别环境不可用(如服务账户配置异常)时退回明文,保存不至于整体失败。
+                    return plain;
+                }
+            }
+
+            public static string Unprotect(string stored)
+            {
+                if (string.IsNullOrEmpty(stored) || !stored.StartsWith(Prefix, StringComparison.Ordinal))
+                    return stored;
+                try
+                {
+                    var decrypted = System.Security.Cryptography.ProtectedData.Unprotect(
+                        Convert.FromBase64String(stored.Substring(Prefix.Length)), Entropy,
+                        System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                    return System.Text.Encoding.UTF8.GetString(decrypted);
+                }
+                catch
+                {
+                    // 换机器/换用户导致解密失败:返回空,让用户重新填写 Key。
+                    return string.Empty;
+                }
+            }
         }
 
         private static string ReadLegacyString(JsonElement root, string name, string fallback)

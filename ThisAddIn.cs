@@ -73,7 +73,7 @@ namespace AgentForExcel
             }
         }
 
-        /// <summary>诊断日志:写到 %LOCALAPPDATA%\AgentForExcel\startup.log</summary>
+        /// <summary>诊断日志:写到 %LOCALAPPDATA%\AgentForExcel\startup.log,超过 5MB 自动轮转。</summary>
         internal static void Log(string message)
         {
             try
@@ -82,11 +82,25 @@ namespace AgentForExcel
                     System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
                     "AgentForExcel", "startup.log");
                 System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                // 轮转:重度使用下日志只增不减会无限膨胀;超限时保留一份旧档便于排查。
+                // 每 64 条检查一次大小即可,避免每条都做文件元数据查询。
+                if ((_logWriteCount++ & 63) == 0 && System.IO.File.Exists(path))
+                {
+                    var info = new System.IO.FileInfo(path);
+                    if (info.Exists && info.Length > 5 * 1024 * 1024)
+                    {
+                        var archive = path + ".old";
+                        System.IO.File.Delete(archive);
+                        System.IO.File.Move(path, archive);
+                    }
+                }
                 var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
                 System.IO.File.AppendAllText(path, line + System.Environment.NewLine);
             }
             catch { /* 日志失败不影响加载项 */ }
         }
+
+        private static int _logWriteCount;
 
         private void ThisAddIn_Shutdown(object sender, EventArgs e)
         {
@@ -97,6 +111,12 @@ namespace AgentForExcel
             Application.WorkbookActivate -= Application_WorkbookActivate;
             Application.WorkbookBeforeClose -= Application_WorkbookBeforeClose;
             Operations.Dashboard.DashboardInteractionManager.Shutdown();
+            // 逐个退订面板的事件再清空字典:仅 Clear() 会让每个 ChatView
+            // 连同聊天数据挂在 Selection 服务上等 GC。
+            foreach (var pane in _taskPanesByWindow.Values)
+            {
+                try { FindChatView(pane)?.Teardown(); } catch { }
+            }
             _taskPanesByWindow.Clear();
             _appContext?.Dispose();
         }
@@ -131,10 +151,28 @@ namespace AgentForExcel
                     MessageBoxIcon.Information);
                 return;
             }
+            if (_appContext == null)
+            {
+                MessageBox.Show(
+                    "Agent 尚未完成初始化(启动可能出过错)，请重启 Excel 后重试。",
+                    "Agent for Excel",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
 
-            var pane = EnsureTaskPaneForWindow(window, false);
-            pane.Visible = !pane.Visible;
-            Log("Ribbon: 切换窗口 " + window.Hwnd + " 的面板 (Visible=" + pane.Visible + ")");
+            try
+            {
+                var pane = EnsureTaskPaneForWindow(window, false);
+                if (pane == null) return;
+                pane.Visible = !pane.Visible;
+                Log("Ribbon: 切换窗口 " + window.Hwnd + " 的面板 (Visible=" + pane.Visible + ")");
+            }
+            catch (Exception ex)
+            {
+                // 面板可能已随窗口关闭而失效;吞掉异常避免冒泡进 Excel。
+                Log("Ribbon: 切换面板异常: " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -317,12 +355,50 @@ namespace AgentForExcel
                     _appContext.Selection.Unlock();
             }
             catch (Exception ex) { Log("WorkbookBeforeClose 清理选区异常: " + ex.Message); }
+
+            // 工作簿关闭即其窗口销毁:立即清理对应的任务窗格条目,
+            // 不等下次激活时的惰性检测(死条目会钉住整棵 ChatView 对象图)。
+            try
+            {
+                var doomedHandles = new List<int>();
+                foreach (var pair in _taskPanesByWindow)
+                {
+                    try
+                    {
+                        var paneWindow = pair.Value.Window as Excel.Window;
+                        var ownerWorkbookName = Convert.ToString((paneWindow?.Parent as Excel.Workbook)?.Name);
+                        if (string.Equals(ownerWorkbookName, workbook?.Name, StringComparison.OrdinalIgnoreCase))
+                            doomedHandles.Add(pair.Key);
+                    }
+                    catch
+                    {
+                        // 访问失败说明窗口已销毁,同样需要清理。
+                        doomedHandles.Add(pair.Key);
+                    }
+                }
+                foreach (var handle in doomedHandles)
+                {
+                    CustomTaskPane doomed;
+                    if (_taskPanesByWindow.TryGetValue(handle, out doomed))
+                    {
+                        try { FindChatView(doomed)?.Teardown(); } catch { }
+                    }
+                    _taskPanesByWindow.Remove(handle);
+                }
+            }
+            catch (Exception ex) { Log("WorkbookBeforeClose 清理面板异常: " + ex.Message); }
         }
 
         /// <summary>获取或创建指定 Excel 窗口独有的任务窗格。</summary>
         private CustomTaskPane EnsureTaskPaneForWindow(Excel.Window window, bool showWhenCreated)
         {
             if (window == null) throw new ArgumentNullException(nameof(window));
+            if (_appContext == null)
+            {
+                // 启动半失败时 ChatView.Initialize(null) 会空引用;直接跳过。
+                Log("EnsureTaskPaneForWindow: 上下文未初始化,跳过");
+                return null;
+            }
 
             var windowHandle = window.Hwnd;
             CustomTaskPane existing;
@@ -334,8 +410,11 @@ namespace AgentForExcel
                     var ignored = existing.Window;
                     return existing;
                 }
-                catch (ObjectDisposedException)
+                catch (Exception)
                 {
+                    // RCW 释放后抛出的常是 COMException 而非 ObjectDisposedException,
+                    // 任何失败都按"窗口已关闭"处理:退订事件并清理死条目。
+                    try { FindChatView(existing)?.Teardown(); } catch { }
                     _taskPanesByWindow.Remove(windowHandle);
                 }
             }

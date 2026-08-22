@@ -127,6 +127,7 @@
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Security" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="Microsoft.CSharp" />
@@ -266,6 +267,7 @@
     <Compile Include="AI\ToolDefinitions.cs" />
     <!-- ===== 业务代码:Operations 层 ===== -->
     <Compile Include="Operations\IOperation.cs" />
+    <Compile Include="Operations\ExcelBatchScope.cs" />
     <Compile Include="Operations\OperationDispatcher.cs" />
     <Compile Include="Operations\OperationRegistration.cs" />
     <Compile Include="Operations\Task\TaskExecutionRegistry.cs" />
@@ -306,6 +308,7 @@
     <Compile Include="Services\RuntimeEnvironmentInspector.cs" />
     <Compile Include="Services\SelectionContextService.cs" />
     <Compile Include="Services\PermissionPolicyService.cs" />
+    <Compile Include="Services\AgentRunCoordinator.cs" />
     <Compile Include="Services\AgentAutomationService.cs" />
     <!-- ===== 业务代码:UI 层(代码) ===== -->
     <Compile Include="UI\TaskPaneHost.cs">

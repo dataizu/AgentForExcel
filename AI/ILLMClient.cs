@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using AgentForExcel.Models;
 using AgentForExcel.Operations;
@@ -21,11 +22,15 @@ namespace AgentForExcel.AI
         /// <summary>多轮对话重载:带上历史消息。</summary>
         Task<LlmReply> ChatAsync(string userMessage, ExcelContextSnapshot excelContext, IReadOnlyList<ChatTurn> history);
 
-        /// <summary>流式多轮对话；文本增量通过 onTextDelta 实时返回。</summary>
+        /// <summary>
+        /// 流式多轮对话;文本增量通过 onTextDelta 实时返回。
+        /// cancellationToken 触发后,等待中的请求/读取会以 OperationCanceledException 中止。
+        /// </summary>
         Task<LlmReply> ChatStreamingAsync(
             string userMessage,
             ExcelContextSnapshot excelContext,
             IReadOnlyList<ChatTurn> history,
+            CancellationToken cancellationToken,
             Action<string> onTextDelta);
     }
 

@@ -75,6 +75,15 @@ namespace AgentForExcel.Operations.Chart
 
         public string Execute(AppContext context)
         {
+            // 分析页写入快照 + 表格样式 + 图表创建是连续重操作,批量作用域抑制逐次重绘。
+            using (new ExcelBatchScope(context))
+            {
+                return ExecuteCore(context);
+            }
+        }
+
+        private string ExecuteCore(AppContext context)
+        {
             var sourceSheet = Cell.CellOperationSupport.GetWorksheet(context, _sourceSheet);
             var sourceRange = Cell.CellOperationSupport.GetRange(sourceSheet, _sourceAddress);
             if (sourceRange.Rows.Count < 2 || sourceRange.Columns.Count < 2)
@@ -212,25 +221,34 @@ namespace AgentForExcel.Operations.Chart
 
         private SeriesData ReadSeriesData(Range sourceRange, bool isProportion)
         {
-            var categoryColumn = ResolveColumn(sourceRange, _categoryField, false);
-            var valueColumn = ResolveColumn(sourceRange, _valueField, true);
+            // 一次性读入整个区域(2×2 以上返回 1-based object[,]),
+            // 后续表头匹配、列探测、取值全部走托管数组,
+            // 避免逐格 COM 访问(大表上可达数万次跨进程调用)。
+            var values = sourceRange.Value2 as object[,];
+            if (values == null)
+                throw new ArgumentException("图表源区域数据无法读取。");
+
+            var rowCount = values.GetLength(0);
+            var columnCount = values.GetLength(1);
+
+            var categoryColumn = ResolveColumn(values, columnCount, rowCount, _categoryField, false);
+            var valueColumn = ResolveColumn(values, columnCount, rowCount, _valueField, true);
             if (categoryColumn == valueColumn)
                 throw new ArgumentException("分类字段和数值字段不能是同一列。");
 
             var result = new SeriesData
             {
-                CategoryHeader = Convert.ToString(((Range)sourceRange.Cells[1, categoryColumn]).Value2)?.Trim() ?? "分类",
-                ValueHeader = Convert.ToString(((Range)sourceRange.Cells[1, valueColumn]).Value2)?.Trim() ?? "数值",
-                OriginalCount = sourceRange.Rows.Count - 1
+                CategoryHeader = Convert.ToString(values[1, categoryColumn])?.Trim() ?? "分类",
+                ValueHeader = Convert.ToString(values[1, valueColumn])?.Trim() ?? "数值",
+                OriginalCount = rowCount - 1
             };
 
-            for (var row = 2; row <= sourceRange.Rows.Count; row++)
+            for (var row = 2; row <= rowCount; row++)
             {
-                var category = Convert.ToString(((Range)sourceRange.Cells[row, categoryColumn]).Value2)?.Trim();
+                var category = Convert.ToString(values[row, categoryColumn])?.Trim();
                 if (string.IsNullOrWhiteSpace(category) || ShouldExclude(category)) continue;
-                object rawValue = ((Range)sourceRange.Cells[row, valueColumn]).Value2;
                 double value;
-                if (!TryConvertDouble(rawValue, out value)) continue;
+                if (!TryConvertDouble(values[row, valueColumn], out value)) continue;
                 if (isProportion && value < 0)
                     throw new ArgumentException("占比图不能包含负数，请先明确负值的处理方式。");
                 if (isProportion && Math.Abs(value) < 0.0000001) continue;
@@ -323,25 +341,24 @@ namespace AgentForExcel.Operations.Chart
                    normalized == "合计" || normalized == "总计" || normalized == "小计";
         }
 
-        private static int ResolveColumn(Range sourceRange, string field, bool preferNumeric)
+        private static int ResolveColumn(object[,] values, int columnCount, int rowCount, string field, bool preferNumeric)
         {
             if (!string.IsNullOrWhiteSpace(field))
             {
-                for (var column = 1; column <= sourceRange.Columns.Count; column++)
+                for (var column = 1; column <= columnCount; column++)
                 {
-                    var header = Convert.ToString(((Range)sourceRange.Cells[1, column]).Value2)?.Trim();
+                    var header = Convert.ToString(values[1, column])?.Trim();
                     if (string.Equals(header, field.Trim(), StringComparison.OrdinalIgnoreCase)) return column;
                 }
                 throw new ArgumentException("找不到图表字段：「" + field + "」。");
             }
 
             if (!preferNumeric) return 1;
-            for (var column = sourceRange.Columns.Count; column >= 1; column--)
-                for (var row = 2; row <= sourceRange.Rows.Count; row++)
+            for (var column = columnCount; column >= 1; column--)
+                for (var row = 2; row <= rowCount; row++)
                 {
                     double numericValue;
-                    object rawValue = ((Range)sourceRange.Cells[row, column]).Value2;
-                    if (TryConvertDouble(rawValue, out numericValue)) return column;
+                    if (TryConvertDouble(values[row, column], out numericValue)) return column;
                 }
             throw new ArgumentException("图表区域中没有可用的数值列。");
         }
@@ -367,19 +384,30 @@ namespace AgentForExcel.Operations.Chart
 
         private static void SortSeriesDescending(SeriesData data)
         {
-            for (var i = 0; i < data.Values.Count - 1; i++)
+            var count = data.Values.Count;
+            if (count < 2) return;
+
+            // 索引排序替代两两交换的 O(n²) 实现,万级分类不再冻结 UI;
+            // 平局按原顺序裁决,保持与旧实现一致的稳定语义。
+            var indexes = new int[count];
+            for (var i = 0; i < count; i++) indexes[i] = i;
+            Array.Sort(indexes, (left, right) =>
             {
-                for (var j = i + 1; j < data.Values.Count; j++)
-                {
-                    if (data.Values[j] <= data.Values[i]) continue;
-                    var value = data.Values[i];
-                    data.Values[i] = data.Values[j];
-                    data.Values[j] = value;
-                    var category = data.Categories[i];
-                    data.Categories[i] = data.Categories[j];
-                    data.Categories[j] = category;
-                }
+                var comparison = data.Values[right].CompareTo(data.Values[left]);
+                return comparison != 0 ? comparison : left.CompareTo(right);
+            });
+
+            var sortedCategories = new List<string>(count);
+            var sortedValues = new List<double>(count);
+            foreach (var index in indexes)
+            {
+                sortedCategories.Add(data.Categories[index]);
+                sortedValues.Add(data.Values[index]);
             }
+            data.Categories.Clear();
+            data.Values.Clear();
+            data.Categories.AddRange(sortedCategories);
+            data.Values.AddRange(sortedValues);
         }
 
         private static void SortSeriesChronologically(SeriesData data)

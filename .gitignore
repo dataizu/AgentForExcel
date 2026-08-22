@@ -40,3 +40,7 @@ conversations.json
 
 # Marketing site local dependencies
 marketing-site/node_modules/
+
+# Temporary handoff docs
+给ChatGPT的提示词.md
+*提示词*.md

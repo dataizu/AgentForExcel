@@ -561,11 +561,43 @@ namespace AgentForExcel.Operations.PowerPivot
             if (table == null) throw new ArgumentException("数据模型中不存在表「" + _table + "」。");
             dynamic existing = PowerPivotSupport.FindMeasure(model, _name);
             if (existing != null && !_replace) throw new InvalidOperationException("度量值「" + _name + "」已经存在。");
-            if (existing != null) existing.Delete();
+
+            // 替换前先备份原定义:新 DAX 语法非法时 Add 会抛异常,
+            // 若不恢复,用户原有度量会随 Delete 一起丢失且 Power Pivot 模型无 Undo。
+            string backupFormula = null, backupFormatString = null, backupDescription = null;
+            if (existing != null)
+            {
+                try { backupFormula = Convert.ToString(existing.Formula); } catch { }
+                try { backupFormatString = Convert.ToString(existing.FormatString); } catch { }
+                try { backupDescription = Convert.ToString(existing.Description); } catch { }
+                existing.Delete();
+            }
+
             var dax = _formula.TrimStart().StartsWith("=", StringComparison.Ordinal) ? _formula.TrimStart().Substring(1) : _formula;
             dax = PowerPivotSupport.RewriteTableReference(dax, _table, Convert.ToString(table.Name));
             dynamic format = PowerPivotSupport.GetFormat(model, _format, _decimalPlaces, _symbol);
-            dynamic measure = model.ModelMeasures.Add(_name, table, dax, format, _description ?? string.Empty);
+            dynamic measure;
+            try
+            {
+                measure = model.ModelMeasures.Add(_name, table, dax, format, _description ?? string.Empty);
+            }
+            catch
+            {
+                if (backupFormula != null)
+                {
+                    try
+                    {
+                        var restored = model.ModelMeasures.Add(
+                            _name, table, backupFormula,
+                            PowerPivotSupport.GetFormat(model, "general", 2, null),
+                            backupDescription ?? string.Empty);
+                        if (!string.IsNullOrEmpty(backupFormatString))
+                            try { restored.FormatString = backupFormatString; } catch { }
+                    }
+                    catch { /* 恢复失败时抛出原始异常,让用户看到真正的失败原因 */ }
+                }
+                throw;
+            }
             return "已创建 DAX 度量值「" + Convert.ToString(measure.Name) + "」：" + dax + "。";
         }
         public sealed class Factory : IOperationFactory

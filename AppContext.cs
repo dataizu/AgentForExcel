@@ -31,6 +31,21 @@ namespace AgentForExcel
         /// <summary>写操作权限与风险分级策略。</summary>
         public Services.PermissionPolicyService Permissions { get; private set; }
 
+        /// <summary>
+        /// 进程级 Agent 运行互斥:同一 Excel 进程同一时刻只允许一个对话运行。
+        /// 共享的选区锁/任务计划/聊天历史都是单例,并行运行会互相破坏。
+        /// </summary>
+        public Services.AgentRunCoordinator RunCoordinator { get; private set; }
+
+        /// <summary>
+        /// 共享聊天历史存储。所有窗口的 ChatView 必须共用同一实例 ——
+        /// 各自 new 一份会在保存时用旧快照把对方的新会话从文件里抹掉。
+        /// </summary>
+        public Services.ChatHistoryStore ChatStore { get; private set; }
+
+        /// <summary>共享的聊天历史文档(与 ChatStore 配套的单一内存实例)。</summary>
+        public Models.ChatHistoryDocument ChatDocument { get; internal set; }
+
         public AppContext(Application excel, Factory factory)
         {
             Excel = excel ?? throw new ArgumentNullException(nameof(excel));
@@ -45,6 +60,15 @@ namespace AgentForExcel
             Selection = new Services.SelectionContextService(Excel);
             Selection.Refresh();
             Permissions = new Services.PermissionPolicyService(this);
+            RunCoordinator = new Services.AgentRunCoordinator();
+
+            // 聊天历史:全进程共享一份文档 + 存储,多窗口看到同一状态。
+            ChatStore = new Services.ChatHistoryStore();
+            ChatDocument = Settings.SaveChatHistory
+                ? ChatStore.Load()
+                : new Models.ChatHistoryDocument();
+            if (ChatDocument.Conversations.Count == 0)
+                ChatStore.CreateConversation(ChatDocument, Settings.ActiveProfileId);
 
             // AI 客户端:OpenAI 兼容协议,可对接智谱 GLM / DeepSeek / 通义等
             LLM = new AI.OpenAICompatibleClient(Settings);

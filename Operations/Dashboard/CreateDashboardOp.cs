@@ -56,6 +56,15 @@ namespace AgentForExcel.Operations.Dashboard
 
         public string Execute(AppContext context)
         {
+            // 看板构建含大量工作表写入与多个透视/图表对象创建,批量作用域抑制逐次重绘。
+            using (new ExcelBatchScope(context))
+            {
+                return ExecuteCore(context);
+            }
+        }
+
+        private string ExecuteCore(AppContext context)
+        {
             var workbook = context?.Excel?.ActiveWorkbook;
             if (workbook == null) throw new InvalidOperationException("当前没有打开的工作簿。");
 
@@ -163,6 +172,13 @@ namespace AgentForExcel.Operations.Dashboard
                     DashboardInteractionManager.RefreshDashboard(workbook, dashboardSheet.Name);
 
                 supportSheet.Visible = XlSheetVisibility.xlSheetVeryHidden;
+                try
+                {
+                    ThisAddIn.Log("看板构建完成: ChartObjects.Count=" +
+                        Convert.ToInt32(((ChartObjects)dashboardSheet.ChartObjects(Type.Missing)).Count) +
+                        ", FilterMode=" + actualFilterMode);
+                }
+                catch { }
                 dashboardSheet.Activate();
                 try { context.Excel.ActiveWindow.DisplayGridlines = false; } catch { }
                 try { context.Excel.ActiveWindow.Zoom = 85; } catch { }
@@ -187,10 +203,18 @@ namespace AgentForExcel.Operations.Dashboard
 
         private void ValidateSource(Range sourceRange)
         {
+            // 一次读入整个区域,表头校验与数值探测全部走托管数组,
+            // 避免对上万行源数据逐格发起 COM 调用。
+            var values = sourceRange.Value2 as object[,];
+            if (values == null)
+                throw new ArgumentException("看板源区域数据无法读取。");
+            var rowCount = values.GetLength(0);
+            var columnCount = values.GetLength(1);
+
             var headers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (var column = 1; column <= sourceRange.Columns.Count; column++)
+            for (var column = 1; column <= columnCount; column++)
             {
-                var header = Convert.ToString(((Range)sourceRange.Cells[1, column]).Value2)?.Trim();
+                var header = Convert.ToString(values[1, column])?.Trim();
                 if (string.IsNullOrWhiteSpace(header))
                     throw new ArgumentException("看板源区域的标题行不能包含空白字段名。");
                 if (!headers.Add(header))
@@ -201,12 +225,12 @@ namespace AgentForExcel.Operations.Dashboard
                 if (!headers.Contains(field))
                     throw new ArgumentException("源区域中找不到字段「" + field + "」。");
 
-            var valueColumn = FindColumn(sourceRange, _valueField);
+            var valueColumn = FindColumn(values, columnCount, _valueField);
             var hasNumericValue = false;
-            for (var row = 2; row <= sourceRange.Rows.Count; row++)
+            for (var row = 2; row <= rowCount; row++)
             {
                 double ignored;
-                if (TryConvertDouble(((Range)sourceRange.Cells[row, valueColumn]).Value2, out ignored))
+                if (TryConvertDouble(values[row, valueColumn], out ignored))
                 {
                     hasNumericValue = true;
                     break;
@@ -534,6 +558,11 @@ namespace AgentForExcel.Operations.Dashboard
             const int listStartColumn = 52; // AZ 起，避开透视辅助区域。
             var bindingToken = Math.Abs(DateTime.Now.Ticks % 100000000).ToString(CultureInfo.InvariantCulture);
             var bindings = new List<DashboardFilterBinding>();
+            // 筛选字段的去重取值统一从这一次读入的数组中获取,
+            // 避免每个字段对整列逐行发起 COM 调用。
+            var sourceValues = sourceRange.Value2 as object[,];
+            if (sourceValues == null)
+                throw new ArgumentException("看板源区域数据无法读取。");
 
             dashboardSheet.Range["A5:N5"].Value2 = "全局筛选 · 下拉兼容模式";
             for (var index = 0; index < filterFields.Count; index++)
@@ -562,7 +591,7 @@ namespace AgentForExcel.Operations.Dashboard
                 control.HorizontalAlignment = XlHAlign.xlHAlignLeft;
                 control.VerticalAlignment = XlVAlign.xlVAlignCenter;
 
-                var values = ReadDistinctFilterValues(sourceRange, field);
+                var values = ReadDistinctFilterValues(sourceValues, field);
                 var listColumn = listStartColumn + index;
                 ((Range)supportSheet.Cells[1, listColumn]).Value2 = field;
                 ((Range)supportSheet.Cells[2, listColumn]).Value2 = DashboardInteractionManager.AllSelection;
@@ -597,14 +626,16 @@ namespace AgentForExcel.Operations.Dashboard
             return bindingName;
         }
 
-        private static List<object> ReadDistinctFilterValues(Range sourceRange, string field)
+        private static List<object> ReadDistinctFilterValues(object[,] sourceValues, string field)
         {
-            var column = FindColumn(sourceRange, field);
+            var columnCount = sourceValues.GetLength(1);
+            var rowCount = sourceValues.GetLength(0);
+            var column = FindColumn(sourceValues, columnCount, field);
             var values = new List<object>();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            for (var row = 2; row <= sourceRange.Rows.Count; row++)
+            for (var row = 2; row <= rowCount; row++)
             {
-                var raw = ((Range)sourceRange.Cells[row, column]).Value2;
+                var raw = sourceValues[row, column];
                 if (raw == null) continue;
                 var key = Convert.ToString(raw, CultureInfo.InvariantCulture)?.Trim();
                 if (string.IsNullOrWhiteSpace(key) || !seen.Add(key)) continue;
@@ -703,11 +734,11 @@ namespace AgentForExcel.Operations.Dashboard
             return Convert.ToString(connected.Count) + " 张 [" + string.Join(",", names) + "]";
         }
 
-        private static int FindColumn(Range range, string field)
+        private static int FindColumn(object[,] values, int columnCount, string field)
         {
-            for (var column = 1; column <= range.Columns.Count; column++)
+            for (var column = 1; column <= columnCount; column++)
             {
-                var header = Convert.ToString(((Range)range.Cells[1, column]).Value2)?.Trim();
+                var header = Convert.ToString(values[1, column])?.Trim();
                 if (string.Equals(header, field, StringComparison.OrdinalIgnoreCase)) return column;
             }
             return -1;

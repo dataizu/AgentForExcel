@@ -38,6 +38,8 @@ namespace AgentForExcel.UI
         private bool _updatingModelPicker;
         private bool _isBusy;
         private bool _scrollToBottomPending;
+        // 当前 Agent 运行的取消源;忙时发送按钮切换为"停止",点击即取消。
+        private System.Threading.CancellationTokenSource _activeRunCts;
 
         public ChatView()
         {
@@ -47,6 +49,7 @@ namespace AgentForExcel.UI
                 InitializeComponent();
                 ThisAddIn.Log("ChatView: InitializeComponent 完成");
                 MessagesList.ItemsSource = _messages;
+                Unloaded += (s, e) => Teardown();
                 ThisAddIn.Log("ChatView: ItemsSource 已设置");
             }
             catch (Exception ex)
@@ -61,12 +64,10 @@ namespace AgentForExcel.UI
         {
             ThisAddIn.Log("ChatView.Initialize: 开始");
             _app = app;
-            _chatStore = new ChatHistoryStore();
-            _chatHistory = _app.Settings.SaveChatHistory
-                ? _chatStore.Load()
-                : new ChatHistoryDocument();
-            if (_chatHistory.Conversations.Count == 0)
-                _chatStore.CreateConversation(_chatHistory, _app.Settings.ActiveProfileId);
+            // 聊天历史用 AppContext 上的全进程共享实例:
+            // 多窗口共用同一文档,保存时不会互相覆盖丢失会话。
+            _chatStore = _app.ChatStore;
+            _chatHistory = _app.ChatDocument;
             var activeConversation = _chatHistory.Conversations.FirstOrDefault(item =>
                                          item.Id == _chatHistory.ActiveConversationId)
                                      ?? _chatHistory.Conversations[0];
@@ -94,26 +95,34 @@ namespace AgentForExcel.UI
             }));
         }
 
-        private async void SendButton_Click(object sender, RoutedEventArgs e) => await SendAsync();
+        private async void SendButton_Click(object sender, RoutedEventArgs e)
+        {
+            // 忙时发送按钮是"停止"按钮:点击即请求中断当前 Agent 运行。
+            if (_isBusy)
+            {
+                try { _activeRunCts?.Cancel(); } catch { }
+                return;
+            }
+            await SendAsync();
+        }
 
         private async void InputBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
             {
                 e.Handled = true;
-                await SendAsync();
+                if (!_isBusy) await SendAsync();
             }
         }
 
         private async Task SendAsync()
         {
-            if (_app == null) return;
+            if (_app == null || _isBusy) return;
 
             var text = InputBox.Text?.Trim();
             if (string.IsNullOrEmpty(text)) return;
 
-            if (!_app.Selection.IsLocked)
-                _app.Selection.LockCurrent("task");
+            // 先校验再锁定:校验失败提前返回时不应留下任务级选区锁。
             var effectiveSelection = _app.Selection.Effective;
             if (text.IndexOf("@当前选区", StringComparison.OrdinalIgnoreCase) >= 0 &&
                 (effectiveSelection == null || !effectiveSelection.IsValid))
@@ -122,29 +131,48 @@ namespace AgentForExcel.UI
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
+
+            // 进程级运行互斥:共享的选区锁/任务计划/聊天历史都是单例,
+            // 另一窗口正在运行时必须直接拒绝,否则会互相覆盖状态。
+            string otherRunDescription;
+            if (!_app.RunCoordinator.TryBegin(this, text, out otherRunDescription))
+            {
+                var hint = string.IsNullOrWhiteSpace(otherRunDescription)
+                    ? string.Empty
+                    : ":「" + (otherRunDescription.Length > 30 ? otherRunDescription.Substring(0, 30) + "…" : otherRunDescription) + "」";
+                AddAssistant("另一个 Excel 窗口的对话正在运行" + hint +
+                             "。请等它结束或点它的停止按钮后再发送。");
+                return;
+            }
+
+            if (!_app.Selection.IsLocked)
+                _app.Selection.LockCurrent("task");
             var requestText = effectiveSelection != null
                 ? text.Replace("@当前选区", effectiveSelection.PromptReference)
                 : text;
             var preserveTaskSelectionLock = false;
-
-            // 渲染用户消息并清空输入框
-            WelcomePanel.Visibility = Visibility.Collapsed;
-            AddUser(text);
-            UpdateConversationTitle(text);
-            PersistActiveConversation();
-            InputBox.Clear();
-            SetInputEnabled(false);
-
-            var thinking = AddStatus("正在分析工作簿…");
+            ChatMessage thinking = null;
+            ChatMessage currentStatus = null;
             var chatTimer = Stopwatch.StartNew();
             var chatOutcome = "exception";
             var chatRounds = 0;
             var chatToolCalls = 0;
             var streamedCharacters = 0;
             var streamedRenderCount = 0;
+            _activeRunCts = new System.Threading.CancellationTokenSource();
+            var runCancellationToken = _activeRunCts.Token;
 
             try
             {
+                // 渲染用户消息并清空输入框
+                WelcomePanel.Visibility = Visibility.Collapsed;
+                AddUser(text);
+                UpdateConversationTitle(text);
+                PersistActiveConversation();
+                InputBox.Clear();
+                SetInputEnabled(false);
+                thinking = AddStatus("正在分析工作簿…");
+                currentStatus = thinking;
                 // 1) 校验配置
                 if (string.IsNullOrWhiteSpace(_app.Settings.ApiKey))
                 {
@@ -156,7 +184,6 @@ namespace AgentForExcel.UI
 
                 // 2) 启动真正的多轮 Agent 循环：工具结果会按 tool_call_id 回传给模型，
                 // 模型可以继续分析或调用下一项工具，直到给出不含工具调用的最终答复。
-                ChatMessage currentStatus = thinking;
                 ChatMessage reusableToolStatus = null;
                 ChatMessage activeTaskPlan = null;
                 var streamedText = new StringBuilder();
@@ -171,6 +198,7 @@ namespace AgentForExcel.UI
                             null,
                             contextSnapshot,
                             turns,
+                            runCancellationToken,
                             delta =>
                             {
                                 streamedText.Append(delta);
@@ -230,7 +258,8 @@ namespace AgentForExcel.UI
                         if (!_messages.Contains(target)) _messages.Add(target);
                         ApplyToolResult(target, call, result);
                         ScrollToBottom();
-                    });
+                    },
+                    runCancellationToken);
 
                 chatRounds = run.Rounds;
                 chatToolCalls = run.ToolCallCount;
@@ -238,17 +267,30 @@ namespace AgentForExcel.UI
 
                 if (!run.Completed)
                 {
-                    preserveTaskSelectionLock = true;
-                    var reason = run.StopReason == "tool_call_limit"
-                        ? $"本次已执行 {run.ToolCallCount} 个工具调用"
-                        : $"本次已连续运行 {run.Rounds} 轮";
-                    AddAssistant($"为避免模型反复调用工具，已暂停自动执行（{reason}）。你可以回复“继续”，我会基于现有结果接着处理。");
+                    if (run.StopReason == "cancelled")
+                    {
+                        chatOutcome = "cancelled";
+                        AddAssistant("已停止生成。已完成的结果会保留在工作簿与本对话中。");
+                    }
+                    else
+                    {
+                        preserveTaskSelectionLock = true;
+                        var reason = run.StopReason == "tool_call_limit"
+                            ? $"本次已执行 {run.ToolCallCount} 个工具调用"
+                            : $"本次已连续运行 {run.Rounds} 轮";
+                        AddAssistant($"为避免模型反复调用工具，已暂停自动执行（{reason}）。你可以回复“继续”，我会基于现有结果接着处理。");
+                    }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                chatOutcome = "cancelled";
+                AddAssistant("已停止生成。已完成的结果会保留在工作簿与本对话中。");
             }
             catch (Exception ex)
             {
                 chatOutcome = "exception";
-                if (thinking.Kind == ChatMessageKind.Status)
+                if (thinking != null && thinking.Kind == ChatMessageKind.Status)
                     SetAssistantText(thinking, "分析失败：" + ex.Message);
                 else
                     AddAssistant("分析失败：" + ex.Message);
@@ -262,9 +304,17 @@ namespace AgentForExcel.UI
                     "outcome=" + chatOutcome + "|rounds=" + chatRounds +
                     "|tool_calls=" + chatToolCalls + "|stream_chars=" + streamedCharacters +
                     "|stream_renders=" + streamedRenderCount);
+                // 收敛残留的状态气泡:多轮/取消/空回复路径下 currentStatus
+                // 可能仍是无限动画的 Status 消息,统一转成终态文本,避免 spinner 永转。
+                if (currentStatus != null && currentStatus.Kind == ChatMessageKind.Status)
+                    SetAssistantText(currentStatus, "⏹ " + (currentStatus.Title ?? "本轮处理已结束"));
                 if (!preserveTaskSelectionLock && _app.Selection.LockOwner == "task")
                     _app.Selection.Unlock("task");
                 PersistActiveConversation();
+                _activeRunCts?.Dispose();
+                _activeRunCts = null;
+                // 释放进程级运行权,其他窗口的对话可以开始了。
+                _app.RunCoordinator.End(this);
                 SetInputEnabled(true);
                 InputBox.Focus();
             }
@@ -720,12 +770,28 @@ namespace AgentForExcel.UI
         private void SetInputEnabled(bool enabled)
         {
             _isBusy = !enabled;
-            InputBox.IsEnabled = enabled;
-            SendButton.IsEnabled = enabled;
+            // 忙时输入框保持可用(用户可准备下一条消息,Enter 不会误发);
+            // 发送按钮切换为"停止"按钮,点击即取消当前运行。
+            InputBox.IsEnabled = true;
+            SendButton.IsEnabled = true;
             NewChatButton.IsEnabled = enabled;
             QuickModelCombo.IsEnabled = enabled;
             SelectionReferenceButton.IsEnabled = enabled;
             SelectionLockButton.IsEnabled = enabled;
+            // 会话/设置入口在运行期间禁用:切换或删除会话会破坏运行中的对话上下文。
+            HistoryButton.IsEnabled = enabled;
+            SettingsButton.IsEnabled = enabled;
+
+            var sendBrush = new SolidColorBrush(enabled
+                ? Color.FromRgb(0x16, 0x86, 0x53)
+                : Color.FromRgb(0xB4, 0x3A, 0x2A));
+            sendBrush.Freeze();
+            SendButton.Background = sendBrush;
+            SendButton.BorderBrush = sendBrush;
+            SendButton.ToolTip = enabled ? "发送" : "停止生成";
+            SendButton.SetValue(System.Windows.Automation.AutomationProperties.NameProperty,
+                enabled ? "发送消息" : "停止生成");
+            SendButtonIcon.Text = enabled ? "\uE724" : "\uE768";
         }
 
         private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -975,6 +1041,9 @@ namespace AgentForExcel.UI
 
         private void SwitchConversation_Click(object sender, RoutedEventArgs e)
         {
+            // Agent 运行期间切换会话会清空正在被循环追加的 _history,
+            // 把两个会话的上下文搅在一起,必须直接拒绝。
+            if (_isBusy) return;
             var id = (sender as Button)?.Tag as string;
             var conversation = _chatHistory.Conversations.FirstOrDefault(item => item.Id == id);
             if (conversation == null) return;
@@ -985,6 +1054,8 @@ namespace AgentForExcel.UI
 
         private void DeleteConversation_Click(object sender, RoutedEventArgs e)
         {
+            // 同上:运行中删除会话同样会破坏进行中的对话状态。
+            if (_isBusy) return;
             var id = (sender as Button)?.Tag as string;
             var conversation = _chatHistory.Conversations.FirstOrDefault(item => item.Id == id);
             if (conversation == null) return;
@@ -1212,6 +1283,21 @@ namespace AgentForExcel.UI
                 return;
             }
             UpdateSelectionContextUi();
+        }
+
+        /// <summary>
+        /// 释放对应用级服务的订阅。Selection 服务是 add-in 单例,
+        /// 不退订会导致每个已关闭窗口的 ChatView(连同聊天数据)无法被回收。
+        /// 供宿主在窗口关闭时显式调用;OnUnloaded 作为兜底,幂等可重复调用。
+        /// </summary>
+        public void Teardown()
+        {
+            try
+            {
+                if (_app?.Selection != null)
+                    _app.Selection.Changed -= SelectionContext_Changed;
+            }
+            catch { }
         }
 
         private void UpdateSelectionContextUi()

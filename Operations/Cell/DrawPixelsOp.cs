@@ -42,6 +42,15 @@ namespace AgentForExcel.Operations.Cell
 
         public string Execute(AppContext context)
         {
+            // 像素绘制会产生上万次 Interior 赋值,批量作用域避免逐段重绘与事件链。
+            using (new ExcelBatchScope(context))
+            {
+                return ExecuteCore(context);
+            }
+        }
+
+        private string ExecuteCore(AppContext context)
+        {
             var sheet = CellOperationSupport.GetWorksheet(context, _sheetName);
             var rows = _pixels.GetLength(0);
             var columns = _pixels.GetLength(1);

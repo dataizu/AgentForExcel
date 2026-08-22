@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Drawing.Imaging;
+using System.Linq;
 using System.IO;
 using System.Globalization;
 using System.Reflection;
@@ -291,8 +292,8 @@ namespace AgentForExcel.Stage1Smoke
                 Assert(Convert.ToString(worksheet.Range("O2").Value2) == dashboardSourceDateBefore, "联动看板修改了源数据");
                 Assert(Convert.ToDouble(worksheet.Range("S2").Value2) == dashboardSourceValueBefore, "联动看板修改了源数值");
                 dynamic dashboardSheet = workbook.Worksheets.Item("Agent看板");
-                Assert(Convert.ToInt32(dashboardSheet.ChartObjects().Count) == 3, "联动看板图表数量错误");
-                for (var chartIndex = 1; chartIndex <= 3; chartIndex++)
+                Assert(Convert.ToInt32(dashboardSheet.ChartObjects().Count) == 4, "联动看板图表数量错误");
+                for (var chartIndex = 1; chartIndex <= 4; chartIndex++)
                 {
                     dynamic pivotLayout = dashboardSheet.ChartObjects(chartIndex).Chart.PivotLayout;
                     Assert(pivotLayout != null, "看板图表 " + chartIndex + " 不是动态透视图");
@@ -307,12 +308,12 @@ namespace AgentForExcel.Stage1Smoke
                     "，值=" + Convert.ToString(dashboardKpiRaw));
                 dynamic dashboardDataSheet = workbook.Worksheets.Item("Agent看板数据");
                 Assert(Convert.ToInt32(dashboardDataSheet.Visible) == 2, "联动看板辅助数据页没有设为深度隐藏");
-                Assert(Convert.ToInt32(dashboardDataSheet.PivotTables().Count) == 6, "联动看板共享透视数据模型不完整");
+                Assert(Convert.ToInt32(dashboardDataSheet.PivotTables().Count) == 7, "联动看板共享透视数据模型不完整");
                 Assert(Convert.ToInt32(workbook.SlicerCaches.Count) == 2, "联动看板全局筛选器数量错误");
                 for (var cacheIndex = 1; cacheIndex <= Convert.ToInt32(workbook.SlicerCaches.Count); cacheIndex++)
                 {
                     var linkedPivotCount = Convert.ToInt32(workbook.SlicerCaches.Item(cacheIndex).PivotTables.Count);
-                    Assert(linkedPivotCount == 7,
+                    Assert(linkedPivotCount == 8,
                         "全局筛选器没有联动全部 KPI、图表和明细透视表，切片器 " + cacheIndex + " 实际连接 " + linkedPivotCount + " 张");
                 }
                 var nativeRankingPointsBefore = Convert.ToInt32(dashboardSheet.ChartObjects(1).Chart.SeriesCollection(1).Points.Count);
@@ -332,7 +333,7 @@ namespace AgentForExcel.Stage1Smoke
 
                 dynamic dropdownSheet = workbook.Worksheets.Item("Agent下拉看板");
                 dynamic dropdownDataSheet = workbook.Worksheets.Item("Agent下拉看板数据");
-                Assert(Convert.ToInt32(dropdownSheet.ChartObjects().Count) == 3, "下拉兼容看板图表数量错误");
+                Assert(Convert.ToInt32(dropdownSheet.ChartObjects().Count) == 4, "下拉兼容看板图表数量错误");
                 Assert(Convert.ToInt32(workbook.SlicerCaches.Count) == 2, "下拉兼容模式不应创建额外切片器");
                 Assert(Convert.ToInt32(dropdownSheet.Range("A7").Validation.Type) == 3, "区域下拉列表没有创建");
                 Assert(Convert.ToInt32(dropdownSheet.Range("E7").Validation.Type) == 3, "类别下拉列表没有创建");
@@ -391,6 +392,7 @@ namespace AgentForExcel.Stage1Smoke
 
                 TestDispatcherConfirmation(worksheet);
                 TestAgentLoop();
+                TestAgentLoopCancellation();
                 TestEmptyReplyRecovery();
                 TestPrematurePlanReplyRecovery();
                 TestTaskPlanCompletionGuard();
@@ -912,6 +914,43 @@ namespace AgentForExcel.Stage1Smoke
             ((Task)dispatcherType.GetMethod("ExecuteAsync").Invoke(dispatcher, new object[] { calls, reject })).Wait();
             Assert(confirmationCount == 1, "覆盖已有内容时没有触发确认");
             Assert(Convert.ToDouble(worksheet.Range("B2").Value2) == 1, "拒绝覆盖后单元格仍被修改");
+
+            // ---- auto 模式:放宽范围限制,但危险属性检查必须保留 ----
+            settingsType.GetProperty("AutomationMode").SetValue(settings, "auto", null);
+            Func<object, bool> requiresConfirmation = decision =>
+                Convert.ToBoolean(decision.GetType().GetProperty("RequiresConfirmation").GetValue(decision, null));
+
+            var formulaFactory = _agentAssembly.GetType("AgentForExcel.Operations.Cell.FillFormulaOp+Factory", true);
+            var formulaJson = "{\"sheet\":\"Stage1Test\",\"address\":\"D2\",\"formula\":\"=[年报.xlsx]Sheet1!A1\"}";
+            var formulaOp = formulaFactory.GetMethod("Parse").Invoke(Activator.CreateInstance(formulaFactory), new object[] { formulaJson });
+            callType.GetProperty("ToolName").SetValue(call, "cell_fill_formula", null);
+            callType.GetProperty("ArgumentsJson").SetValue(call, formulaJson, null);
+            var evaluate = policyType.GetMethod("Evaluate");
+            var decision1 = evaluate.Invoke(policy, new[] { call, formulaOp });
+            Assert(requiresConfirmation(decision1), "auto 模式下外部工作簿公式没有要求确认");
+
+            callType.GetProperty("ToolName").SetValue(call, "pp_mystery_new_tool", null);
+            var decision2 = evaluate.Invoke(policy, new[] { call, formulaOp });
+            Assert(requiresConfirmation(decision2), "auto 模式下白名单外的未知写工具没有要求确认");
+
+            callType.GetProperty("ToolName").SetValue(call, "cell_write_range", null);
+            var oversizedJson = "{\"sheet\":\"Stage1Test\",\"address\":\"H2\",\"values\":[" +
+                string.Join(",", Enumerable.Range(0, 11).Select(row =>
+                    "[" + string.Join(",", Enumerable.Range(0, 11).Select(column => 1)) + "]")) + "]}";
+            callType.GetProperty("ArgumentsJson").SetValue(call, oversizedJson, null);
+            var writeOp = factoryType.GetMethod("Parse").Invoke(Activator.CreateInstance(factoryType), new object[] { oversizedJson });
+            var decision3 = evaluate.Invoke(policy, new[] { call, writeOp });
+            Assert(requiresConfirmation(decision3), "auto 模式下超过写入上限没有要求确认");
+
+            // auto 模式的本职:白名单内常规写入(锁定选区之外)应自动放行。
+            var normalJson = "{\"sheet\":\"Stage1Test\",\"address\":\"F2\",\"values\":[[5]]}";
+            callType.GetProperty("ArgumentsJson").SetValue(call, normalJson, null);
+            var normalOp = factoryType.GetMethod("Parse").Invoke(Activator.CreateInstance(factoryType), new object[] { normalJson });
+            var decision4 = evaluate.Invoke(policy, new[] { call, normalOp });
+            Assert(!requiresConfirmation(decision4), "auto 模式下白名单内常规写入被误拦截");
+            ((Task)dispatcherType.GetMethod("ExecuteAsync").Invoke(dispatcher, new object[] { calls, reject })).Wait();
+            Assert(confirmationCount == 1, "auto 模式白名单写入不应弹出确认");
+            Assert(Convert.ToDouble(worksheet.Range("F2").Value2) == 5, "auto 模式白名单写入没有执行");
         }
 
         private static void TestAgentLoop()
@@ -973,6 +1012,58 @@ namespace AgentForExcel.Stage1Smoke
             Assert(requestCount == 2, "模型请求次数不正确");
             Assert(executeCount == 1, "工具被重复执行");
             Assert(history[history.Count - 1].Role == "assistant", "最终回答没有进入历史");
+        }
+
+        /// <summary>
+        /// 取消路径:请求中途用户点"停止"(流式层抛带 token 的 OCE)时,
+        /// 循环必须优雅收尾(StopReason=cancelled),已写入 history 的内容保留。
+        /// </summary>
+        private static void TestAgentLoopCancellation()
+        {
+            var history = new List<AgentForExcel.AI.ChatTurn>();
+            using (var cts = new CancellationTokenSource())
+            {
+                Func<IReadOnlyList<AgentForExcel.AI.ChatTurn>, Task<AgentForExcel.AI.LlmReply>> request = turns =>
+                {
+                    // 模拟 ChatStreamingAsync 在流式阶段收到取消:抛带 token 的 OCE。
+                    cts.Cancel();
+                    throw new OperationCanceledException(cts.Token);
+                };
+                Func<IReadOnlyList<AgentForExcel.Operations.OperationCall>, Task<IReadOnlyList<string>>> execute =
+                    calls => Task.FromResult<IReadOnlyList<string>>(new[] { "ok" });
+
+                var run = AgentForExcel.AI.AgentLoopRunner.RunAsync(
+                    "分析当前表格趋势",
+                    history,
+                    request,
+                    execute,
+                    null, null, null,
+                    cts.Token).GetAwaiter().GetResult();
+
+                Assert(!run.Completed, "被取消的运行不应标记为完成");
+                Assert(run.StopReason == "cancelled", "取消后 StopReason 应为 cancelled,实际=" + run.StopReason);
+                Assert(run.Rounds >= 0 && run.ToolCallCount == 0, "取消结果的计数状态异常");
+            }
+
+            // 轮次开始前已取消:直接返回取消结果,不再发起请求。
+            var idleHistory = new List<AgentForExcel.AI.ChatTurn>();
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                var requested = false;
+                Func<IReadOnlyList<AgentForExcel.AI.ChatTurn>, Task<AgentForExcel.AI.LlmReply>> noRequest = turns =>
+                {
+                    requested = true;
+                    return Task.FromResult(new AgentForExcel.AI.LlmReply { Text = "不应到达" });
+                };
+                Func<IReadOnlyList<AgentForExcel.Operations.OperationCall>, Task<IReadOnlyList<string>>> noExecute =
+                    calls => Task.FromResult<IReadOnlyList<string>>(new[] { "ok" });
+                var run = AgentForExcel.AI.AgentLoopRunner.RunAsync(
+                    "测试", idleHistory, noRequest, noExecute, null, null, null, cancelled.Token)
+                    .GetAwaiter().GetResult();
+                Assert(!requested, "已取消时不应再发起模型请求");
+                Assert(run.StopReason == "cancelled", "预取消的 StopReason 应为 cancelled,实际=" + run.StopReason);
+            }
         }
 
         private static void TestStreamingAccumulator()

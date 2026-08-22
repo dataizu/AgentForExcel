@@ -54,7 +54,8 @@ namespace AgentForExcel.AI
             Func<IReadOnlyList<OperationCall>, Task<IReadOnlyList<string>>> executeAsync,
             Action<int> onRoundStarting,
             Action<LlmReply, int> onAssistantReply,
-            Action<OperationCall, string, int, int> onToolResult)
+            Action<OperationCall, string, int, int> onToolResult,
+            System.Threading.CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(userMessage))
                 throw new ArgumentException("用户消息不能为空。", nameof(userMessage));
@@ -65,13 +66,72 @@ namespace AgentForExcel.AI
             history.Add(new ChatTurn { Role = "user", Content = userMessage });
             if (!(IsContinuationMessage(userMessage) && TaskExecutionRegistry.HasActivePlan && !TaskExecutionRegistry.IsComplete))
                 TaskExecutionRegistry.BeginRun(userMessage);
-            var toolCallCount = 0;
-            var emptyReplyCount = 0;
-            var completionCheckCount = 0;
-            var lastToolFailureSummary = string.Empty;
-            var pendingCellWriteVerification = false;
+            var state = new RoundState();
 
             for (var round = 1; round <= MaxRounds; round++)
+            {
+                // 每轮开始先响应取消;等待中的请求会以 OCE 中断,这里统一优雅收尾,
+                // 已写入 history 的工具结果保留,模型可在下一轮"继续"时使用。
+                if (cancellationToken.IsCancellationRequested)
+                    return CancelledResult(round, state);
+                try
+                {
+                    // 返回 null 表示本轮已消化、应继续下一轮;返回结果表示运行结束。
+                    var outcome = await RunSingleRoundAsync(
+                        round, history, state, requestAsync, executeAsync,
+                        onRoundStarting, onAssistantReply, onToolResult,
+                        cancellationToken);
+                    if (outcome != null) return outcome;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return CancelledResult(round, state);
+                }
+            }
+
+            return new AgentRunResult
+            {
+                Completed = false,
+                Rounds = MaxRounds,
+                ToolCallCount = state.ToolCallCount,
+                CompletionCheckCount = state.CompletionCheckCount,
+                StopReason = "round_limit"
+            };
+        }
+
+        /// <summary>跨轮可变的运行计数状态;async 方法不能带 ref 参数,统一收拢到一个可变类。</summary>
+        private sealed class RoundState
+        {
+            public int ToolCallCount;
+            public int EmptyReplyCount;
+            public int CompletionCheckCount;
+            public string LastToolFailureSummary = string.Empty;
+            public bool PendingCellWriteVerification;
+        }
+
+        private static AgentRunResult CancelledResult(int round, RoundState state)
+        {
+            return new AgentRunResult
+            {
+                Completed = false,
+                Rounds = Math.Max(1, round - 1),
+                ToolCallCount = state.ToolCallCount,
+                CompletionCheckCount = state.CompletionCheckCount,
+                StopReason = "cancelled"
+            };
+        }
+
+        private static async Task<AgentRunResult> RunSingleRoundAsync(
+            int round,
+            IList<ChatTurn> history,
+            RoundState state,
+            Func<IReadOnlyList<ChatTurn>, Task<LlmReply>> requestAsync,
+            Func<IReadOnlyList<OperationCall>, Task<IReadOnlyList<string>>> executeAsync,
+            Action<int> onRoundStarting,
+            Action<LlmReply, int> onAssistantReply,
+            Action<OperationCall, string, int, int> onToolResult,
+            System.Threading.CancellationToken cancellationToken)
+        {
             {
                 onRoundStarting?.Invoke(round);
                 var reply = await requestAsync(new List<ChatTurn>(history));
@@ -89,38 +149,38 @@ namespace AgentForExcel.AI
 
                 if (!reply.HasOperations)
                 {
-                    if (string.IsNullOrWhiteSpace(reply.Text) && emptyReplyCount < 1 && round < MaxRounds)
+                    if (string.IsNullOrWhiteSpace(reply.Text) && state.EmptyReplyCount < 1 && round < MaxRounds)
                     {
-                        emptyReplyCount++;
+                        state.EmptyReplyCount++;
                         history.Add(new ChatTurn
                         {
                             Role = "user",
                             Content = "请基于已有上下文和工具结果，直接输出面向用户的最终答复；不要只输出思考过程。"
                         });
-                        continue;
+                        return null; // 继续下一轮
                     }
 
                     var continuationReason = GetContinuationReason(
-                        reply.Text, lastToolFailureSummary, pendingCellWriteVerification);
+                        reply.Text, state.LastToolFailureSummary, state.PendingCellWriteVerification);
                     if (!string.IsNullOrWhiteSpace(continuationReason))
                     {
-                        if (completionCheckCount < MaxCompletionNudges && round < MaxRounds)
+                        if (state.CompletionCheckCount < MaxCompletionNudges && round < MaxRounds)
                         {
-                            completionCheckCount++;
+                            state.CompletionCheckCount++;
                             history.Add(new ChatTurn
                             {
                                 Role = "user",
                                 Content = "完成检查未通过：" + continuationReason +
                                           "。请立即基于现有上下文继续调用必要工具、核验结果并完成剩余工作；不要只解释计划，也不要重复已经成功的操作。"
                             });
-                            continue;
+                            return null; // 继续下一轮
                         }
                         return new AgentRunResult
                         {
                             Completed = false,
                             Rounds = round,
-                            ToolCallCount = toolCallCount,
-                            CompletionCheckCount = completionCheckCount,
+                            ToolCallCount = state.ToolCallCount,
+                            CompletionCheckCount = state.CompletionCheckCount,
                             StopReason = TaskExecutionRegistry.HasActivePlan && !TaskExecutionRegistry.IsComplete
                                 ? "incomplete_plan"
                                 : "completion_check_limit"
@@ -130,26 +190,26 @@ namespace AgentForExcel.AI
                     {
                         Completed = true,
                         Rounds = round,
-                        ToolCallCount = toolCallCount,
-                        CompletionCheckCount = completionCheckCount,
+                        ToolCallCount = state.ToolCallCount,
+                        CompletionCheckCount = state.CompletionCheckCount,
                         StopReason = "completed"
                     };
                 }
 
-                if (toolCallCount + reply.Operations.Count > MaxToolCalls)
+                if (state.ToolCallCount + reply.Operations.Count > MaxToolCalls)
                 {
                     return new AgentRunResult
                     {
                         Completed = false,
                         Rounds = round,
-                        ToolCallCount = toolCallCount,
-                        CompletionCheckCount = completionCheckCount,
+                        ToolCallCount = state.ToolCallCount,
+                        CompletionCheckCount = state.CompletionCheckCount,
                         StopReason = "tool_call_limit"
                     };
                 }
 
                 var results = await executeAsync(reply.Operations) ?? new List<string>();
-                toolCallCount += reply.Operations.Count;
+                state.ToolCallCount += reply.Operations.Count;
                 var failures = new List<string>();
 
                 for (var i = 0; i < reply.Operations.Count; i++)
@@ -165,23 +225,15 @@ namespace AgentForExcel.AI
                     });
                     var failed = IsFailureResult(result);
                     if (failed) failures.Add(result);
-                    else if (RequiresCellVerification(reply.Operations[i].ToolName)) pendingCellWriteVerification = true;
-                    else if (reply.Operations[i].ToolName == "cell_read_range") pendingCellWriteVerification = false;
+                    else if (RequiresCellVerification(reply.Operations[i].ToolName)) state.PendingCellWriteVerification = true;
+                    else if (reply.Operations[i].ToolName == "cell_read_range") state.PendingCellWriteVerification = false;
                     onToolResult?.Invoke(reply.Operations[i], result, i, reply.Operations.Count);
                 }
-                lastToolFailureSummary = failures.Count == 0
+                state.LastToolFailureSummary = failures.Count == 0
                     ? string.Empty
                     : string.Join("；", failures);
+                return null; // 本轮含工具调用,继续下一轮
             }
-
-            return new AgentRunResult
-            {
-                Completed = false,
-                Rounds = MaxRounds,
-                ToolCallCount = toolCallCount,
-                CompletionCheckCount = completionCheckCount,
-                StopReason = "round_limit"
-            };
         }
 
         private static string GetContinuationReason(

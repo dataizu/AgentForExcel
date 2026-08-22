@@ -28,6 +28,42 @@ namespace AgentForExcel.Operations.Dashboard
         private static Microsoft.Office.Interop.Excel.Application _application;
         private static bool _handlingChange;
 
+        /// <summary>
+        /// SheetChange 对任何单元格编辑都触发;不设门卫的话,每个无看板的工作簿
+        /// 每次编辑都要全量遍历 Names(数百名称的金融模型会明显卡输入)。
+        /// 门卫按工作簿缓存"上次扫描时的 Names 数量 + 是否含看板定义",
+        /// 数量未变且无定义时只花一次 Names.Count 调用即可返回。
+        /// </summary>
+        private sealed class WorkbookGate
+        {
+            public int NamesCount = -1;
+            public bool HasDefinitions;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Workbook, WorkbookGate> _gates =
+            new System.Runtime.CompilerServices.ConditionalWeakTable<Workbook, WorkbookGate>();
+
+        private static bool WorkbookMightHaveDefinitions(Workbook workbook, List<DashboardFilterBinding> scanned)
+        {
+            var currentCount = workbook.Names.Count;
+            WorkbookGate gate;
+            if (!_gates.TryGetValue(workbook, out gate))
+            {
+                gate = new WorkbookGate();
+                _gates.Add(workbook, gate);
+            }
+            if (gate.NamesCount == currentCount && !gate.HasDefinitions) return false;
+            if (gate.NamesCount != currentCount)
+            {
+                scanned.Clear();
+                scanned.AddRange(ReadDefinitions(workbook));
+                gate.NamesCount = currentCount;
+                gate.HasDefinitions = scanned.Count > 0;
+                if (!gate.HasDefinitions) return false;
+            }
+            return true;
+        }
+
         internal static void Initialize(Microsoft.Office.Interop.Excel.Application application)
         {
             if (application == null) return;
@@ -123,7 +159,12 @@ namespace AgentForExcel.Operations.Dashboard
 
             try
             {
-                foreach (var definition in ReadDefinitions(workbook))
+                var scanned = new List<DashboardFilterBinding>();
+                if (!WorkbookMightHaveDefinitions(workbook, scanned)) return;
+                // 缓存命中(HasDefinitions 且数量未变)时 scanned 为空,读一次全量定义;
+                // 刚重扫过时 scanned 已有结果,直接复用。
+                var definitions = scanned.Count > 0 ? scanned : ReadDefinitions(workbook);
+                foreach (var definition in definitions)
                 {
                     if (!string.Equals(definition.DashboardSheet, sheet.Name, StringComparison.OrdinalIgnoreCase))
                         continue;

@@ -70,7 +70,7 @@ namespace AgentForExcel.AI
                 string respText = await resp.Content.ReadAsStringAsync();
                 if (!resp.IsSuccessStatusCode)
                     throw new InvalidOperationException(
-                        $"大模型请求失败 ({(int)resp.StatusCode} {resp.StatusCode}):\n{respText}");
+                        $"大模型请求失败 ({(int)resp.StatusCode} {resp.StatusCode}):\n{TruncateForDisplay(respText)}");
                 return ParseReply(respText);
             }
         }
@@ -79,6 +79,7 @@ namespace AgentForExcel.AI
             string userMessage,
             ExcelContextSnapshot excelContext,
             IReadOnlyList<ChatTurn> history,
+            System.Threading.CancellationToken cancellationToken,
             Action<string> onTextDelta)
         {
             if (string.IsNullOrWhiteSpace(_settings.ApiKey))
@@ -103,19 +104,39 @@ namespace AgentForExcel.AI
             var url = _settings.BaseUrl.TrimEnd('/') + "/chat/completions";
             var jsonBody = JsonSerializer.Serialize(body, JsonOpts);
             Exception lastConnectionError = null;
-            for (var attempt = 0; attempt < 2; attempt++)
+            TransientHttpException lastTransient = null;
+            const int maxAttempts = 3;
+            for (var attempt = 0; attempt < maxAttempts; attempt++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     return await SendStreamingOnceAsync(
                         url,
                         jsonBody,
+                        cancellationToken,
                         onTextDelta,
                         forceNewConnection: attempt > 0);
                 }
                 catch (TaskCanceledException ex)
                 {
+                    // TaskCanceledException 派生自 OperationCanceledException,必须先判:
+                    // 是用户取消就按取消向上抛,否则视为 HttpClient 整体超时。
+                    cancellationToken.ThrowIfCancellationRequested();
                     throw new InvalidOperationException("模型请求超过 180 秒，已停止等待。请缩小分析范围后重试。", ex);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // 用户主动停止/流空闲超时不参与重试,直接向上传播
+                }
+                catch (TransientHttpException ex)
+                {
+                    // 限流/网关错误:优先按 Retry-After 等待,指数退避,最多 maxAttempts 次。
+                    lastTransient = ex;
+                    if (attempt == maxAttempts - 1) break;
+                    var delaySeconds = Math.Min(ex.RetryAfterSeconds ?? (attempt + 1) * 2, 30);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                    continue;
                 }
                 catch (HttpRequestException ex)
                 {
@@ -128,9 +149,14 @@ namespace AgentForExcel.AI
                         ex);
                 }
 
-                if (attempt == 0)
-                    await Task.Delay(400);
+                if (attempt < maxAttempts - 1)
+                    await Task.Delay(400, cancellationToken);
             }
+
+            if (lastTransient != null)
+                throw new InvalidOperationException(
+                    "模型服务限流或暂时不可用（" + lastTransient.Status + "），已自动重试 " + maxAttempts +
+                    " 次仍失败。请稍等片刻再重试本条消息。", lastTransient);
 
             var host = new Uri(url).Host;
             throw new InvalidOperationException(
@@ -138,9 +164,31 @@ namespace AgentForExcel.AI
                 lastConnectionError);
         }
 
+        /// <summary>可重试的服务端临时故障(限流/网关),携带服务端建议的等待秒数。</summary>
+        private sealed class TransientHttpException : Exception
+        {
+            public int Status { get; }
+            public int? RetryAfterSeconds { get; }
+
+            public TransientHttpException(int status, int? retryAfterSeconds)
+                : base("模型服务临时故障 (" + status + ")")
+            {
+                Status = status;
+                RetryAfterSeconds = retryAfterSeconds;
+            }
+        }
+
+        /// <summary>错误响应体截断,避免长 JSON 撑爆聊天气泡。</summary>
+        private static string TruncateForDisplay(string text, int maxLength = 500)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength) return text;
+            return text.Substring(0, maxLength) + "…(已截断)";
+        }
+
         private async Task<LlmReply> SendStreamingOnceAsync(
             string url,
             string jsonBody,
+            System.Threading.CancellationToken cancellationToken,
             Action<string> onTextDelta,
             bool forceNewConnection)
         {
@@ -151,13 +199,33 @@ namespace AgentForExcel.AI
                 if (forceNewConnection) request.Headers.ConnectionClose = true;
                 request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
-                using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
                 {
                     if (!response.IsSuccessStatusCode)
                     {
                         var error = await response.Content.ReadAsStringAsync();
+                        var status = (int)response.StatusCode;
+                        if (status == 429 || status == 502 || status == 503 || status == 504)
+                        {
+                            int? retryAfter = null;
+                            try
+                            {
+                                if (response.Headers.TryGetValues("Retry-After", out var values))
+                                    foreach (var value in values)
+                                    {
+                                        int seconds;
+                                        if (int.TryParse(value, out seconds))
+                                        {
+                                            retryAfter = seconds;
+                                            break;
+                                        }
+                                    }
+                            }
+                            catch { }
+                            throw new TransientHttpException(status, retryAfter);
+                        }
                         throw new InvalidOperationException(
-                            $"大模型请求失败 ({(int)response.StatusCode} {response.StatusCode}):\n{error}");
+                            $"大模型请求失败 ({status} {response.StatusCode}):\n{TruncateForDisplay(error)}");
                     }
 
                     var accumulator = new StreamingReplyAccumulator();
@@ -165,20 +233,64 @@ namespace AgentForExcel.AI
                     using (var stream = await response.Content.ReadAsStreamAsync())
                     using (var reader = new StreamReader(stream, Encoding.UTF8))
                     {
-                        string line;
-                        while ((line = await reader.ReadLineAsync()) != null)
+                        // .NET Framework 的 ReadLineAsync 没有取消重载:
+                        // 用"空闲超时 + 取消时主动关闭流"的组合 —— 关流会让
+                        // 挂起的 ReadLineAsync 立即抛出,从而中止整个读取循环。
+                        // 关流注册必须挂在 linked(用户取消 ∪ 空闲超时)上:
+                        // 只挂 idleCts 的话用户取消无法中断挂起的读取。
+                        using (var idleCts = new System.Threading.CancellationTokenSource())
+                        using (var linked = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken, idleCts.Token))
+                        using (linked.Token.Register(() => { try { stream.Dispose(); } catch { } }))
                         {
-                            if (string.IsNullOrWhiteSpace(line)) continue;
+                            var idleTimer = new System.Threading.Timer(
+                                _ => { try { idleCts.Cancel(); } catch { } },
+                                null, StreamIdleTimeoutMilliseconds, System.Threading.Timeout.Infinite);
+                            try
+                            {
+                                string line;
+                                while (true)
+                                {
+                                    // 正在持续输出数据时,关流不会发生;循环内显式响应取消,
+                                    // 让"停止"在长回复流式阶段立即生效。
+                                    cancellationToken.ThrowIfCancellationRequested();
+                                    line = await reader.ReadLineAsync();
+                                    // 每收到一行就重置空闲计时;连接中断(返回 null)时立即取消计时器,
+                                    // 避免 finally 阶段误触发"空闲超时"。
+                                    idleTimer.Change(line == null
+                                        ? System.Threading.Timeout.Infinite
+                                        : StreamIdleTimeoutMilliseconds,
+                                        System.Threading.Timeout.Infinite);
+                                    if (line == null) break;
 
-                            var payload = line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                                ? line.Substring(5).TrimStart()
-                                : line.Trim();
-                            if (payload == "[DONE]") break;
-                            if (!payload.StartsWith("{", StringComparison.Ordinal)) continue;
+                                    if (string.IsNullOrWhiteSpace(line)) continue;
 
-                            receivedChunk = true;
-                            var delta = accumulator.Consume(payload);
-                            if (!string.IsNullOrEmpty(delta)) onTextDelta?.Invoke(delta);
+                                    var payload = line.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                                        ? line.Substring(5).TrimStart()
+                                        : line.Trim();
+                                    if (payload == "[DONE]") break;
+                                    if (!payload.StartsWith("{", StringComparison.Ordinal)) continue;
+
+                                    receivedChunk = true;
+                                    var delta = accumulator.Consume(payload);
+                                    if (!string.IsNullOrEmpty(delta)) onTextDelta?.Invoke(delta);
+                                }
+
+                                if (idleCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                                    throw CreateIdleTimeoutException();
+                            }
+                            catch (ObjectDisposedException)
+                            {
+                                if (cancellationToken.IsCancellationRequested)
+                                    throw new OperationCanceledException("已停止生成。", cancellationToken);
+                                if (idleCts.IsCancellationRequested)
+                                    throw CreateIdleTimeoutException();
+                                throw;
+                            }
+                            finally
+                            {
+                                idleTimer.Dispose();
+                            }
                         }
                     }
 
@@ -189,6 +301,21 @@ namespace AgentForExcel.AI
                     return reply;
                 }
             }
+        }
+
+        /// <summary>流式读取阶段两行数据之间允许的最长等待;超时视为服务端停滞。</summary>
+        private const int StreamIdleTimeoutMilliseconds = 180000;
+
+        /// <summary>
+        /// 空闲超时用 InvalidOperationException 而非 OCE:OCE 会被 UI 统一显示成
+        /// "已停止生成",把服务端停滞误报成用户主动停止;专用异常走通用错误分支,
+        /// 用户能看到真实原因。
+        /// </summary>
+        private static InvalidOperationException CreateIdleTimeoutException()
+        {
+            return new InvalidOperationException(
+                "模型流式响应超过 " + StreamIdleTimeoutMilliseconds / 1000 +
+                " 秒没有新数据，已自动中断。请直接重试本条消息。");
         }
 
         private static string GetDeepestMessage(Exception exception)
@@ -278,11 +405,15 @@ namespace AgentForExcel.AI
 
             if (string.Equals(turn.Role, "tool", StringComparison.OrdinalIgnoreCase))
             {
+                var content = turn.Content ?? string.Empty;
+                if (content.Length > MaxToolResultCharacters)
+                    content = content.Substring(0, MaxToolResultCharacters) +
+                               "\n…(工具结果过长已截断,关键信息保留在前段)";
                 return new
                 {
                     role = "tool",
                     tool_call_id = turn.ToolCallId,
-                    content = turn.Content ?? string.Empty
+                    content
                 };
             }
 
@@ -306,13 +437,111 @@ namespace AgentForExcel.AI
                 messages.Add(new { role = "system", content = excelContext.ToPromptText() });
 
             if (history != null)
-                foreach (var turn in history)
+                foreach (var turn in TrimHistoryToBudget(history))
                     messages.Add(ToProtocolMessage(turn));
 
             // userMessage 为空表示工具结果后的自动续跑；history 末尾已经是 tool。
             if (!string.IsNullOrWhiteSpace(userMessage))
                 messages.Add(new { role = "user", content = userMessage });
             return messages;
+        }
+
+        /// <summary>
+        /// 发送历史的字符预算。长任务中工具结果(含表格 JSON)会不断累积,
+        /// 不裁剪会每轮全量重发,最终触发服务商上下文超限且该会话永久不可用。
+        /// </summary>
+        private const int MaxHistoryCharacters = 120000;
+
+        /// <summary>单条工具结果参与发送的最大长度;超出部分截断。</summary>
+        private const int MaxToolResultCharacters = 8000;
+
+        private static IReadOnlyList<ChatTurn> TrimHistoryToBudget(IReadOnlyList<ChatTurn> history)
+        {
+            if (history == null || history.Count == 0) return history;
+            var total = 0;
+            for (var i = 0; i < history.Count; i++) total += TurnSize(history[i]);
+            if (total <= MaxHistoryCharacters) return history;
+
+            // 从末尾往前保留,超预算时回退到一条 user 消息处切割 ——
+            // 保证保留部分仍以 user 开头,其后的 assistant(tool_calls)+tool 序列完整,
+            // 不会产生协议上非法的"孤儿 tool 消息"。
+            var kept = 0;
+            for (var i = history.Count - 1; i >= 0; i--)
+            {
+                var size = TurnSize(history[i]);
+                if (kept + size > MaxHistoryCharacters)
+                {
+                    var cut = i + 1;
+                    while (cut < history.Count &&
+                           !string.Equals(history[cut].Role, "user", StringComparison.OrdinalIgnoreCase))
+                        cut++;
+
+                    if (cut >= history.Count)
+                    {
+                        // 退化场景:整个 history 只有最初一条 user(Agent 自动续跑的典型形态),
+                        // 没有 user 边界可切。保留尾部并补一条合成 user 头,保证协议合法
+                        // 的同时把请求压进预算 —— 比全量发送触发服务商上下文超限好得多。
+                        return TrimHistoryTail(history);
+                    }
+
+                    ThisAddIn.Log("历史裁剪: 发送时保留最近 " + (history.Count - cut) + "/" + history.Count +
+                                  " 条消息(其余已超出上下文预算)");
+                    var result = new List<ChatTurn>(history.Count - cut);
+                    for (var index = cut; index < history.Count; index++) result.Add(history[index]);
+                    return result;
+                }
+                kept += size;
+            }
+            return history;
+        }
+
+        /// <summary>
+        /// 无 user 边界时的兜底:从尾部保留直到预算用尽,再在头部插入一条合成 user 消息
+        /// 说明被省略的部分。切点同样避开"孤儿 tool"(若尾部第一组是 tool 开头,继续前移)。
+        /// </summary>
+        private static IReadOnlyList<ChatTurn> TrimHistoryTail(IReadOnlyList<ChatTurn> history)
+        {
+            var kept = 0;
+            var cut = history.Count;
+            for (var i = history.Count - 1; i >= 1; i--)
+            {
+                var size = TurnSize(history[i]);
+                if (kept + size > MaxHistoryCharacters) break;
+                kept += size;
+                cut = i;
+            }
+            // 头部不能是孤儿 tool 消息:持续前移直到不是 tool。
+            while (cut < history.Count &&
+                   string.Equals(history[cut].Role, "tool", StringComparison.OrdinalIgnoreCase))
+                cut++;
+            if (cut <= 0 || cut >= history.Count) return history;
+
+            var result = new List<ChatTurn>(history.Count - cut + 1)
+            {
+                new ChatTurn
+                {
+                    Role = "user",
+                    Content = "(系统提示:为控制上下文长度,更早的对话与中间工具结果已省略," +
+                              "以下是本任务最近的部分记录,请基于它继续。)"
+                }
+            };
+            for (var index = cut; index < history.Count; index++) result.Add(history[index]);
+            ThisAddIn.Log("历史裁剪(无边界兜底): 保留尾部 " + (history.Count - cut) + "/" + history.Count + " 条消息");
+            return result;
+        }
+
+        /// <summary>按"实际发送口径"计算消息大小:工具结果超长部分发送前会截断,不计入预算。</summary>
+        private static int TurnSize(ChatTurn turn)
+        {
+            if (turn == null) return 0;
+            var contentLength = (turn.Content ?? string.Empty).Length;
+            if (string.Equals(turn.Role, "tool", StringComparison.OrdinalIgnoreCase))
+                contentLength = Math.Min(contentLength, MaxToolResultCharacters);
+            var size = contentLength;
+            if (turn.ToolCalls != null)
+                foreach (var call in turn.ToolCalls)
+                    size += (call?.ArgumentsJson ?? string.Empty).Length + 64;
+            return size;
         }
 
         private static readonly JsonSerializerOptions JsonOpts = new JsonSerializerOptions

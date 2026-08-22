@@ -38,6 +38,8 @@ namespace AgentForExcel.Operations.PowerQuery
     {
         public dynamic ListObject { get; set; }
         public bool UsedCompatibilityEngine { get; set; }
+        /// <summary>兼容引擎按类型规则转换失败、已保留原值的单元格数。</summary>
+        public int TypeCoercionFailures { get; set; }
     }
 
     internal static class PowerQuerySupport
@@ -120,8 +122,9 @@ namespace AgentForExcel.Operations.PowerQuery
             AgentPowerQueryMetadata agentMetadata;
             if (TryReadMetadata(agentQuery, out agentMetadata))
             {
-                dynamic fallbackTable = LoadFallbackTable(workbook, sheet, destination, queryName, agentMetadata);
-                return new QueryLoadOutcome { ListObject = fallbackTable, UsedCompatibilityEngine = true };
+                int coercionFailures;
+                dynamic fallbackTable = LoadFallbackTable(workbook, sheet, destination, queryName, agentMetadata, out coercionFailures);
+                return new QueryLoadOutcome { ListObject = fallbackTable, UsedCompatibilityEngine = true, TypeCoercionFailures = coercionFailures };
             }
             try
             {
@@ -152,8 +155,9 @@ namespace AgentForExcel.Operations.PowerQuery
                 if (!TryReadMetadata(query, out metadata))
                     throw new InvalidOperationException(
                         "Excel 原生 Power Query 加载失败，并且该查询不是 Agent 创建的兼容查询，无法自动回退。", nativeError);
-                dynamic fallbackTable = LoadFallbackTable(workbook, sheet, destination, queryName, metadata);
-                return new QueryLoadOutcome { ListObject = fallbackTable, UsedCompatibilityEngine = true };
+                int coercionFailures;
+                dynamic fallbackTable = LoadFallbackTable(workbook, sheet, destination, queryName, metadata, out coercionFailures);
+                return new QueryLoadOutcome { ListObject = fallbackTable, UsedCompatibilityEngine = true, TypeCoercionFailures = coercionFailures };
             }
         }
 
@@ -185,8 +189,10 @@ namespace AgentForExcel.Operations.PowerQuery
         }
 
         internal static dynamic RefreshFallbackTable(
-            Workbook workbook, Worksheet sheet, dynamic oldTable, string queryName)
+            Workbook workbook, Worksheet sheet, dynamic oldTable, string queryName,
+            out int typeCoercionFailures)
         {
+            typeCoercionFailures = 0;
             dynamic query = FindQuery(workbook, queryName);
             AgentPowerQueryMetadata metadata;
             if (!TryReadMetadata(query, out metadata)) return null;
@@ -195,7 +201,8 @@ namespace AgentForExcel.Operations.PowerQuery
             var destinationAddress = Convert.ToString(topLeft.Address);
             oldTable.Unlist();
             oldRange.Clear();
-            return LoadFallbackTable(workbook, sheet, sheet.Range[destinationAddress], queryName, metadata);
+            return LoadFallbackTable(workbook, sheet, sheet.Range[destinationAddress], queryName, metadata,
+                out typeCoercionFailures);
         }
 
         internal static bool IsFallbackTableForQuery(dynamic listObject, string queryName)
@@ -206,8 +213,9 @@ namespace AgentForExcel.Operations.PowerQuery
 
         private static dynamic LoadFallbackTable(
             Workbook workbook, Worksheet destinationSheet, Range destination, string queryName,
-            AgentPowerQueryMetadata metadata)
+            AgentPowerQueryMetadata metadata, out int typeCoercionFailures)
         {
+            typeCoercionFailures = 0;
             dynamic workbookDynamic = workbook;
             var sourceSheet = (Worksheet)workbookDynamic.Worksheets.Item(metadata.SourceSheet);
             var sourceRange = sourceSheet.Range[metadata.SourceAddress];
@@ -236,7 +244,7 @@ namespace AgentForExcel.Operations.PowerQuery
                     if (value != null && !string.IsNullOrWhiteSpace(Convert.ToString(value))) blank = false;
                 }
                 if (metadata.RemoveBlankRows && blank) continue;
-                ApplyTypes(headers, values, metadata.ColumnTypes);
+                typeCoercionFailures += ApplyTypes(headers, values, metadata.ColumnTypes);
                 rows.Add(values);
             }
             if (metadata.RemoveDuplicates)
@@ -280,27 +288,99 @@ namespace AgentForExcel.Operations.PowerQuery
             return result;
         }
 
-        private static void ApplyTypes(string[] headers, object[] values, IEnumerable<QueryColumnType> types)
+        /// <summary>
+        /// 按规则做类型转换;无法解析的单元格保留原值并计入返回的失败数,
+        /// 而不是让一个脏值(如整数列里的 "N/A")废掉整个兼容加载。
+        /// 源数据经 Value2 读入:数值/日期单元格本来就是 double(日期为 OADate 序列号),
+        /// 必须先按数值分流 —— 否则真实日期列会被文本解析判为失败,产生成百上千条假告警。
+        /// </summary>
+        private static int ApplyTypes(string[] headers, object[] values, IEnumerable<QueryColumnType> types)
         {
-            if (types == null) return;
+            if (types == null) return 0;
+            var failures = 0;
             foreach (var rule in types)
             {
                 var index = Array.FindIndex(headers,
                     header => string.Equals(header, rule.Field, StringComparison.OrdinalIgnoreCase));
                 if (index < 0 || values[index] == null || string.IsNullOrWhiteSpace(Convert.ToString(values[index]))) continue;
-                var text = Convert.ToString(values[index]).Trim();
-                switch ((rule.Type ?? string.Empty).ToLowerInvariant())
+
+                var raw = values[index];
+                var type = (rule.Type ?? string.Empty).ToLowerInvariant();
+
+                // ---- 数值单元格(double)分流:天然满足数值类规则;日期规则用 FromOADate ----
+                var numericCell = raw as double?;
+                if (numericCell.HasValue)
                 {
-                    case "text": values[index] = text; break;
-                    case "integer": values[index] = long.Parse(text, NumberStyles.Any, CultureInfo.InvariantCulture); break;
+                    switch (type)
+                    {
+                        case "integer":
+                        case "number":
+                        case "currency":
+                        case "percentage":
+                            values[index] = raw;   // 已是数值,无需转换
+                            break;
+                        case "date":
+                        case "datetime":
+                            DateTime fromOa;
+                            try { fromOa = DateTime.FromOADate(numericCell.Value); }
+                            catch { failures++; break; }   // 超出 OADate 有效范围
+                            values[index] = type == "date" ? fromOa.Date : fromOa;
+                            break;
+                        case "text":
+                            values[index] = Convert.ToString(raw, CultureInfo.InvariantCulture);
+                            break;
+                        case "logical":
+                            // Excel 里 TRUE/FALSE 经 Value2 也是数值(0/-1),按 0/非0 解释
+                            values[index] = numericCell.Value != 0d;
+                            break;
+                    }
+                    continue;
+                }
+
+                // ---- 文本单元格:按规则解析 ----
+                var text = Convert.ToString(raw).Trim();
+                switch (type)
+                {
+                    case "text":
+                        values[index] = text;
+                        break;
+                    case "integer":
+                        long integerValue;
+                        if (long.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out integerValue))
+                            values[index] = integerValue;
+                        else failures++;
+                        break;
                     case "number":
                     case "currency":
-                    case "percentage": values[index] = double.Parse(text, NumberStyles.Any, CultureInfo.InvariantCulture); break;
-                    case "date": values[index] = DateTime.Parse(text, CultureInfo.GetCultureInfo("zh-CN")).Date; break;
-                    case "datetime": values[index] = DateTime.Parse(text, CultureInfo.GetCultureInfo("zh-CN")); break;
-                    case "logical": values[index] = bool.Parse(text); break;
+                    case "percentage":
+                        double numericValue;
+                        if (double.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out numericValue))
+                            values[index] = numericValue;
+                        else failures++;
+                        break;
+                    case "date":
+                    case "datetime":
+                        DateTime dateTimeValue;
+                        if (TryParseDateTime(text, out dateTimeValue))
+                            values[index] = type == "date" ? dateTimeValue.Date : dateTimeValue;
+                        else failures++;
+                        break;
+                    case "logical":
+                        bool logicalValue;
+                        if (bool.TryParse(text, out logicalValue))
+                            values[index] = logicalValue;
+                        else failures++;
+                        break;
                 }
             }
+            return failures;
+        }
+
+        private static bool TryParseDateTime(string text, out DateTime value)
+        {
+            var zhCn = CultureInfo.GetCultureInfo("zh-CN");
+            return DateTime.TryParse(text, zhCn, DateTimeStyles.None, out value) ||
+                   DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out value);
         }
 
         private static string NormalizeKey(object value) => value == null ? "<null>" :
@@ -631,10 +711,14 @@ namespace AgentForExcel.Operations.PowerQuery
                 PowerQuerySupport.StyleQueryResult(resultRange);
                 sheet.Columns.AutoFit();
                 sheet.Activate();
+                var coercionNote = outcome.TypeCoercionFailures > 0
+                    ? $"（{outcome.TypeCoercionFailures} 个单元格无法按指定类型转换，已保留原值）"
+                    : string.Empty;
                 return "已将查询「" + _queryName + "」加载到 " + sheet.Name + "!" +
                        Convert.ToString(resultRange.Address) + "，结果为 " + Math.Max(0, rows - 1) +
                        " 行 × " + columns + " 列" +
-                       (outcome.UsedCompatibilityEngine ? "（已自动使用兼容清洗引擎）" : string.Empty) + "。";
+                       (outcome.UsedCompatibilityEngine ? "（已自动使用兼容清洗引擎）" : string.Empty) +
+                       coercionNote + "。";
             }
             catch
             {
@@ -678,6 +762,7 @@ namespace AgentForExcel.Operations.PowerQuery
             if (PowerQuerySupport.FindQuery(workbook, _queryName) == null)
                 throw new ArgumentException("找不到 Power Query 查询「" + _queryName + "」。");
             var refreshed = 0;
+            var coercionFailures = 0;
             foreach (Worksheet sheet in workbook.Worksheets)
             {
                 dynamic listObjects = sheet.ListObjects;
@@ -694,14 +779,21 @@ namespace AgentForExcel.Operations.PowerQuery
                     }
                     catch
                     {
-                        if (PowerQuerySupport.RefreshFallbackTable(workbook, sheet, listObject, _queryName) != null)
+                        int failures;
+                        if (PowerQuerySupport.RefreshFallbackTable(workbook, sheet, listObject, _queryName, out failures) != null)
+                        {
                             refreshed++;
+                            coercionFailures += failures;
+                        }
                     }
                     break;
                 }
             }
             if (refreshed == 0) return "查询「" + _queryName + "」尚未加载到工作表；查询定义已保留。";
-            return "已刷新查询「" + _queryName + "」的 " + refreshed + " 个加载结果。";
+            var refreshNote = coercionFailures > 0
+                ? $"（{coercionFailures} 个单元格无法按指定类型转换，已保留原值）"
+                : string.Empty;
+            return "已刷新查询「" + _queryName + "」的 " + refreshed + " 个加载结果" + refreshNote + "。";
         }
 
         public sealed class Factory : IOperationFactory

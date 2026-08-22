@@ -59,10 +59,30 @@ namespace AgentForExcel.Services
 
                 if (string.Equals(settings.AutomationMode, "auto", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (tool == "pq_create_from_range")
-                        return ReadBool(root, "replace_existing")
-                            ? PermissionDecision.Confirm("将覆盖现有 Power Query 查询定义")
-                            : PermissionDecision.Allow("自动执行模式：常规写操作自动放行");
+                    // auto 模式放宽的只是"范围"要求(不强制锁定选区),
+                    // 危险属性检查必须保留:外部引用、超上限写入、覆盖查询定义。
+                    // 写工具按显式白名单放行,未知/新增工具一律确认(fail-closed)。
+                    if (!IsAutoExecutableTool(tool))
+                        return PermissionDecision.Confirm("该写操作不在自动执行白名单内");
+
+                    if (tool == "pq_create_from_range" && ReadBool(root, "replace_existing"))
+                        return PermissionDecision.Confirm("将覆盖现有 Power Query 查询定义");
+
+                    if (tool == "cell_fill_formula")
+                    {
+                        var formula = ReadString(root, "formula");
+                        if (!string.IsNullOrWhiteSpace(formula) && ExternalWorkbookFormula.IsMatch(formula))
+                            return PermissionDecision.Confirm("公式包含外部工作簿引用");
+                    }
+
+                    if (IsCellWritingTool(tool))
+                    {
+                        var targetCells = EstimateTargetCellCount(root);
+                        if (targetCells > Math.Max(1, settings.AutoWriteMaxCells))
+                            return PermissionDecision.Confirm(
+                                $"目标共 {targetCells:#,##0} 个单元格，超过自动写入上限 {settings.AutoWriteMaxCells:#,##0}");
+                    }
+
                     return PermissionDecision.Allow("自动执行模式：常规写操作自动放行");
                 }
 
@@ -206,9 +226,77 @@ namespace AgentForExcel.Services
 
         private static bool IsAlwaysConfirmTool(string tool)
         {
-            return tool == "vba_execute_safe" || tool == "pp_add_query_to_model" ||
+            // vba_ 全前缀匹配:将来新增任何 VBA 写工具都默认需要确认,
+            // 与 AlwaysConfirmReason 的语义一致,不再依赖逐个枚举。
+            if (tool.StartsWith("vba_", StringComparison.OrdinalIgnoreCase)) return true;
+            return tool == "pp_add_query_to_model" ||
                    tool == "pp_add_relationship" || tool == "pp_add_measure" ||
                    tool == "pp_refresh_model" || tool == "pq_refresh";
+        }
+
+        /// <summary>
+        /// auto 模式可自动执行的写工具白名单。
+        /// 保守放行集:单元格级写入/格式化 + 输出到新工作表的产物类工具;
+        /// 数据模型变更、刷新、VBA 与任何未列出的工具都需要确认。
+        /// </summary>
+        private static bool IsAutoExecutableTool(string tool)
+        {
+            switch (tool)
+            {
+                case "cell_write_range":
+                case "cell_fill_formula":
+                case "cell_format_range":
+                case "cell_draw_pixels":
+                case "cell_draw_from_image":
+                case "analysis_create_view":
+                case "chart_create":
+                case "pivot_create":
+                case "dashboard_create":
+                case "pq_create_from_range":
+                case "pq_load_to_sheet":
+                case "pp_create_model_pivot":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private static bool IsCellWritingTool(string tool)
+        {
+            return tool == "cell_write_range" || tool == "cell_fill_formula" ||
+                   tool == "cell_draw_pixels" || tool == "cell_draw_from_image";
+        }
+
+        /// <summary>
+        /// 估算写操作的目标格数(优先用参数中的矩阵形状;无形状时按地址解析区域)。
+        /// 无法估计时返回 long.MaxValue,让上限检查按超限处理(fail-closed)。
+        /// </summary>
+        private long EstimateTargetCellCount(JsonElement root)
+        {
+            JsonElement shape;
+            var hasShape = root.TryGetProperty("pixels", out shape) || root.TryGetProperty("values", out shape);
+            if (hasShape && shape.ValueKind == JsonValueKind.Array)
+            {
+                GetValueShape(shape, out var rows, out var columns);
+                return (long)rows * columns;
+            }
+
+            var address = ReadString(root, "address");
+            if (string.IsNullOrWhiteSpace(address)) return long.MaxValue;
+            try
+            {
+                var sheetName = ReadString(root, "sheet");
+                var workbook = _context.Excel.ActiveWorkbook;
+                var sheet = string.IsNullOrWhiteSpace(sheetName)
+                    ? _context.Excel.ActiveSheet as Excel.Worksheet
+                    : workbook?.Worksheets[sheetName] as Excel.Worksheet;
+                var range = sheet?.get_Range(address);
+                return range == null ? long.MaxValue : Convert.ToInt64(range.CountLarge);
+            }
+            catch
+            {
+                return long.MaxValue;
+            }
         }
 
         private static string AlwaysConfirmReason(string tool)
